@@ -7,7 +7,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet"/>
 <script type="module">
 import{initializeApp}from"https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-import{getFirestore,collection,addDoc,onSnapshot,doc,updateDoc,getDoc,setDoc,query,orderBy,where,serverTimestamp}from"https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import{getDatabase,ref,push,set,update,onValue,get,query,orderByChild}from"https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
 
 const firebaseConfig={
   apiKey:"AIzaSyAJMbxBOTlpY8d-gYTJm_gMV1PELsWXsNM",
@@ -21,23 +21,26 @@ const firebaseConfig={
 
 try{
   const app=initializeApp(firebaseConfig);
-  const db=getFirestore(app);
+  const db=getDatabase(app);
   window._db=db;window._fbReady=true;
-  window._fb={collection,addDoc,onSnapshot,doc,updateDoc,getDoc,setDoc,query,orderBy,where,serverTimestamp};
+  window._rtdb={ref,push,set,update,onValue,get,query,orderByChild};
   const s=document.getElementById('db-status');
   if(s){s.textContent='🟢 Live DB';s.style.color='var(--green)';}
 
-  /* Live orders listener */
-  const q=query(collection(db,'zk_orders'),orderBy('timestamp','desc'));
-  onSnapshot(q,snap=>{
-    window._allOrders=snap.docs.map(d=>({id:d.id,...d.data()}));
+  /* Live orders listener — real-time updates */
+  const ordersRef=ref(db,'zk_orders');
+  onValue(ordersRef,snap=>{
+    const data=snap.val()||{};
+    window._allOrders=Object.entries(data)
+      .map(([id,v])=>({id,...v}))
+      .sort((a,b)=>(b.timestamp||0)-(a.timestamp||0));
     const cp=window._curPage||'';
     if(cp==='page-dashboard')window.loadAdminDashboard&&window.loadAdminDashboard();
     if(cp==='page-rest-dashboard')window.loadRestDashboard&&window.loadRestDashboard();
     if(window._trackingOrderId)window.refreshTracker&&window.refreshTracker(window._trackingOrderId);
   });
 
-  /* Seed default restaurant PINs if not yet in Firestore */
+  /* Seed default restaurant PINs */
   window.seedRestaurantPins=async function(){
     const rests=[
       {rid:'rest_001',name:'Awery Kitchen',pin:'1001'},
@@ -51,32 +54,27 @@ try{
       {rid:'rest_009',name:'Azul Restaurant',pin:'1009'},
       {rid:'rest_010',name:'Bachelor Restaurant',pin:'1010'},
     ];
+    const snap=await get(ref(db,'zk_restaurants'));
+    const existing=snap.val()||{};
     for(const r of rests){
-      const ref=doc(db,'zk_restaurants',r.rid);
-      const snap=await getDoc(ref);
-      if(!snap.exists()){
-        await setDoc(ref,{rid:r.rid,name:r.name,pin:r.pin,createdAt:new Date().toISOString()});
+      if(!existing[r.rid]){
+        await set(ref(db,'zk_restaurants/'+r.rid),{
+          rid:r.rid,name:r.name,pin:r.pin,
+          createdAt:new Date().toISOString()
+        });
       }
     }
-    window.showToast&&window.showToast('✅ Restaurant PINs seeded to Firebase','ok');
+    window.showToast&&window.showToast('✅ Restaurant PINs ready','ok');
   };
 
-  /* Verify PIN — returns role object or null */
+  /* Verify PIN */
   window.verifyPin=async function(pin){
-    const ADMIN_PIN='0000';
-    if(pin===ADMIN_PIN)return{role:'admin',rid:null,name:'Admin'};
-    const{collection,query,where,onSnapshot}=window._fb;
-    return new Promise(resolve=>{
-      const q2=query(collection(db,'zk_restaurants'),where('pin','==',pin));
-      onSnapshot(q2,snap=>{
-        if(!snap.empty){
-          const d=snap.docs[0].data();
-          resolve({role:'restaurant',rid:d.rid,name:d.name});
-        } else {
-          resolve(null);
-        }
-      },{onError:()=>resolve(null)});
-    });
+    if(pin==='0000')return{role:'admin',rid:null,name:'Admin'};
+    const snap=await get(ref(db,'zk_restaurants'));
+    const data=snap.val()||{};
+    const found=Object.values(data).find(r=>r.pin===pin);
+    if(found)return{role:'restaurant',rid:found.rid,name:found.name};
+    return null;
   };
 
 }catch(e){
@@ -88,13 +86,15 @@ try{
 /* Save order */
 window.saveOrder=async function(data){
   if(window._fbReady&&window._db){
-    const{collection,addDoc,serverTimestamp}=window._fb;
-    const ref=await addDoc(collection(window._db,'zk_orders'),{...data,timestamp:serverTimestamp()});
-    return ref.id;
+    const ordersRef=ref(window._db,'zk_orders');
+    const newRef=push(ordersRef);
+    const orderWithTs={...data,timestamp:Date.now()};
+    await set(newRef,orderWithTs);
+    return newRef.key;
   }
   const local=JSON.parse(localStorage.getItem('zk_orders')||'[]');
   const id='loc_'+Date.now();
-  local.unshift({id,...data,timestamp:new Date().toISOString()});
+  local.unshift({id,...data,timestamp:Date.now()});
   localStorage.setItem('zk_orders',JSON.stringify(local));
   window._allOrders=local;
   return id;
@@ -103,8 +103,9 @@ window.saveOrder=async function(data){
 /* Update order status */
 window.updateOrderStatus=async function(orderId,newStatus){
   if(window._fbReady&&window._db){
-    const{doc,updateDoc}=window._fb;
-    await updateDoc(doc(window._db,'zk_orders',orderId),{status:newStatus,updatedAt:new Date().toISOString()});
+    await update(ref(window._db,'zk_orders/'+orderId),{
+      status:newStatus,updatedAt:Date.now()
+    });
     return;
   }
   const local=JSON.parse(localStorage.getItem('zk_orders')||'[]');
@@ -118,8 +119,7 @@ window.updateOrderStatus=async function(orderId,newStatus){
 /* Update restaurant PIN */
 window.updateRestPin=async function(rid,newPin){
   if(!window._fbReady||!window._db)return false;
-  const{doc,updateDoc}=window._fb;
-  await updateDoc(doc(window._db,'zk_restaurants',rid),{pin:newPin});
+  await update(ref(window._db,'zk_restaurants/'+rid),{pin:newPin});
   return true;
 };
 </script>
@@ -426,6 +426,33 @@ select.fi{cursor:pointer;appearance:none;background-image:url("data:image/svg+xm
 @keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(29,185,84,.4)}50%{box-shadow:0 0 0 6px rgba(29,185,84,0)}}
 .track-refresh{width:100%;margin-top:20px;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:10px;border-radius:var(--radius-sm);font-family:var(--font-b);font-size:12px;cursor:pointer;transition:all .18s}.track-refresh:hover{border-color:var(--green);color:var(--green)}
 
+
+/* ══════════ MENU MANAGEMENT ══════════ */
+.menu-mgmt-wrap{max-width:700px}
+.menu-cat-block{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:14px;overflow:hidden}
+.menu-cat-hd{display:flex;align-items:center;justify-content:space-between;padding:13px 16px;background:var(--surface2);border-bottom:1px solid var(--border)}
+.menu-cat-name{font-family:var(--font-h);font-size:14px;font-weight:700}
+.menu-item-row{display:flex;align-items:center;gap:10px;padding:11px 16px;border-bottom:1px solid var(--border)}
+.menu-item-row:last-child{border-bottom:none}
+.menu-item-row.disabled-item{opacity:.45}
+.mir-info{flex:1;min-width:0}
+.mir-name{font-size:13px;font-weight:600}
+.mir-desc{font-size:11px;color:var(--muted);margin-top:1px}
+.mir-price{font-family:var(--font-h);font-size:13px;font-weight:700;color:var(--green);flex-shrink:0;min-width:80px;text-align:right}
+.mir-actions{display:flex;gap:6px;flex-shrink:0}
+.mir-btn{padding:5px 10px;border-radius:50px;font-size:10px;font-weight:700;cursor:pointer;border:none;font-family:var(--font-b);transition:all .15s}
+.mir-btn.edit{background:var(--surface3);color:var(--text);border:1px solid var(--border)}.mir-btn.edit:hover{border-color:var(--green);color:var(--green)}
+.mir-btn.del{background:rgba(239,68,68,.1);color:var(--red);border:1px solid rgba(239,68,68,.2)}.mir-btn.del:hover{background:var(--red);color:#fff}
+.mir-btn.toggle{background:var(--surface3);color:var(--muted);border:1px solid var(--border)}.mir-btn.toggle.on{background:var(--green-dim);color:var(--green);border-color:rgba(29,185,84,.3)}
+.menu-add-btn{width:100%;background:none;border:1px dashed var(--border2);color:var(--muted);padding:10px;border-radius:var(--radius-sm);font-family:var(--font-b);font-size:12px;cursor:pointer;transition:all .18s;margin-top:2px}.menu-add-btn:hover{border-color:var(--green);color:var(--green)}
+/* Item edit modal */
+.item-modal{background:var(--surface);border:1px solid var(--border2);border-radius:18px;padding:24px;width:100%;max-width:400px;position:relative}
+.toggle-switch{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+.ts-track{width:44px;height:24px;background:var(--surface3);border-radius:50px;position:relative;cursor:pointer;transition:background .2s;flex-shrink:0;border:1px solid var(--border)}
+.ts-track.on{background:var(--green)}
+.ts-thumb{position:absolute;top:2px;left:2px;width:18px;height:18px;background:#fff;border-radius:50%;transition:left .2s}
+.ts-track.on .ts-thumb{left:22px}
+
 /* RESPONSIVE */
 @media(max-width:768px){.db-rest-row{grid-template-columns:36px 1fr 1fr 1fr;gap:8px}.db-or-cells{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:540px){
@@ -614,6 +641,7 @@ select.fi{cursor:pointer;appearance:none;background-image:url("data:image/svg+xm
         <div class="db-tab" onclick="restFilterOrders('Preparing',this)">Preparing</div>
         <div class="db-tab" onclick="restFilterOrders('Ready',this)">Ready</div>
         <div class="db-tab" onclick="restFilterOrders('Delivered',this)">Delivered</div>
+        <div class="db-tab" onclick="showMenuMgmt()" id="menu-mgmt-tab">🍽️ My Menu</div>
       </div>
     </div>
     <div id="rest-orders-list"><div class="db-empty">No orders yet. They will appear here automatically when placed.</div></div>
@@ -723,6 +751,38 @@ select.fi{cursor:pointer;appearance:none;background-image:url("data:image/svg+xm
     <div id="co-s2" style="display:none"><div class="pay-st" id="pay-block"></div></div>
   </div>
 </div>
+
+<!-- MENU MANAGEMENT MODAL -->
+<div class="mbg" id="menu-mgmt-modal">
+  <div class="modal" style="max-width:680px;width:100%">
+    <button class="m-close" onclick="closeMenuMgmt()">✕</button>
+    <div class="m-title">🍽️ Manage My Menu</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:18px">Changes save to Firebase instantly. Customers see updates immediately.</div>
+    <div id="menu-mgmt-body">
+      <div class="db-empty"><div class="spinner" style="margin:0 auto 12px"></div>Loading menu…</div>
+    </div>
+  </div>
+</div>
+
+<!-- ITEM EDIT MODAL -->
+<div class="mbg" id="item-edit-modal">
+  <div class="item-modal">
+    <button class="m-close" onclick="closeItemEdit()">✕</button>
+    <div class="m-title" id="item-edit-title">Edit Item</div>
+    <input type="hidden" id="ie-cat"/>
+    <input type="hidden" id="ie-idx"/>
+    <div class="fg"><label class="fl">Item Name *</label><input type="text" class="fi" id="ie-name" placeholder="e.g. Grilled Chicken"/></div>
+    <div class="fg"><label class="fl">Description</label><input type="text" class="fi" id="ie-desc" placeholder="Short description…"/></div>
+    <div class="fg"><label class="fl">Price (TSh) *</label><input type="number" class="fi" id="ie-price" placeholder="e.g. 15000" min="0"/></div>
+    <div class="fg"><label class="fl">Emoji</label><input type="text" class="fi" id="ie-emoji" placeholder="e.g. 🍗" maxlength="4"/></div>
+    <div class="toggle-switch" id="ie-avail-row">
+      <div class="ts-track on" id="ie-avail-track" onclick="toggleItemAvail()"><div class="ts-thumb"></div></div>
+      <span style="font-size:12px;font-weight:600" id="ie-avail-lbl">Available</span>
+    </div>
+    <button class="btn btn-g" style="width:100%;justify-content:center;border-radius:9px;padding:11px" onclick="saveItemEdit()">💾 Save Item</button>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -1152,7 +1212,7 @@ window.loadAdminDashboard=function(){
   const orders=window._allOrders.length?window._allOrders:JSON.parse(localStorage.getItem('zk_orders')||'[]');
   const today=new Date().toDateString();
   const todayOrders=orders.filter(o=>{
-    const ts=o.timestamp?.toDate?o.timestamp.toDate():new Date(o.timestamp||Date.now());
+    const ts=new Date(o.timestamp||Date.now());
     return ts.toDateString()===today;
   });
   const completed=todayOrders.filter(o=>o.status==='Delivered');
@@ -1271,7 +1331,7 @@ function renderAdminOrdersList(orders){
   if(!orders.length){list.innerHTML='<div class="db-empty">No orders found.</div>';return;}
   list.innerHTML='';
   orders.forEach(o=>{
-    const ts=o.timestamp?.toDate?o.timestamp.toDate():new Date(o.timestamp||Date.now());
+    const ts=new Date(o.timestamp||Date.now());
     const timeStr=ts.toLocaleTimeString('en-TZ',{hour:'2-digit',minute:'2-digit'});
     const dateStr=ts.toLocaleDateString('en-TZ',{day:'numeric',month:'short'});
     const sc=STATUS_COLORS[o.status]||'var(--muted)';
@@ -1366,7 +1426,7 @@ function renderRestOrders(orders){
   const rid=_session?.rid;
 
   orders.slice(0,50).forEach(o=>{
-    const ts=o.timestamp?.toDate?o.timestamp.toDate():new Date(o.timestamp||Date.now());
+    const ts=new Date(o.timestamp||Date.now());
     const timeStr=ts.toLocaleTimeString('en-TZ',{hour:'2-digit',minute:'2-digit'});
     const dateStr=ts.toLocaleDateString('en-TZ',{day:'numeric',month:'short'});
     const sc=STATUS_COLORS[o.status]||'var(--muted)';
@@ -1450,6 +1510,194 @@ setTimeout(()=>{window.seedRestaurantPins&&window.seedRestaurantPins();},3000);
 if(_session){
   updateNavUI();
 }
+// ═══════════════════════════════════════════════════════
+// MENU MANAGEMENT
+// ═══════════════════════════════════════════════════════
+let _editAvail = true;
+let _menuDraft = null; // working copy of menu being edited
+
+function showMenuMgmt(){
+  if(!_session||_session.role!=='restaurant'){showToast('Restaurant login required','err');return;}
+  document.getElementById('menu-mgmt-modal').classList.add('open');
+  loadMenuMgmt();
+}
+function closeMenuMgmt(){document.getElementById('menu-mgmt-modal').classList.remove('open');}
+
+async function loadMenuMgmt(){
+  const rid=_session.rid;
+  const body=document.getElementById('menu-mgmt-body');
+  body.innerHTML='<div class="db-empty"><div class="spinner" style="margin:0 auto 12px"></div>Loading menu…</div>';
+
+  // Try Firebase first for saved menu, fallback to hardcoded
+  let menu=null;
+  if(window._fbReady&&window._db){
+    try{
+      const snap=await get(ref(window._db,'zk_restaurants/'+rid));
+      if(snap.exists()&&snap.val().menu){
+        menu=snap.val().menu;
+      }
+    }catch(e){console.warn('Could not load menu from Firebase:',e);}
+  }
+  // Fallback to hardcoded menu
+  if(!menu){
+    const rMeta=restaurantMap[rid];
+    menu=rMeta?JSON.parse(JSON.stringify(rMeta.menu)):[];
+  }
+  _menuDraft=JSON.parse(JSON.stringify(menu));
+  renderMenuMgmt();
+}
+
+function renderMenuMgmt(){
+  const body=document.getElementById('menu-mgmt-body');
+  if(!_menuDraft||!_menuDraft.length){
+    body.innerHTML='<div class="db-empty">No menu categories found.</div>';
+    return;
+  }
+  body.innerHTML='';
+  _menuDraft.forEach((cat,ci)=>{
+    const block=document.createElement('div');
+    block.className='menu-cat-block';
+    block.innerHTML=`<div class="menu-cat-hd">
+      <div class="menu-cat-name">${cat.category}</div>
+      <button class="mir-btn edit" onclick="addNewItem(${ci})">+ Add Item</button>
+    </div>`;
+    cat.items.forEach((item,ii)=>{
+      const row=document.createElement('div');
+      row.className='menu-item-row'+(item.available===false?' disabled-item':'');
+      row.innerHTML=`
+        <div class="mir-info">
+          <div class="mir-name">${item.emoji||''} ${item.name}</div>
+          <div class="mir-desc">${item.desc||''}</div>
+        </div>
+        <div class="mir-price">TSh ${(item.price||0).toLocaleString()}</div>
+        <div class="mir-actions">
+          <button class="mir-btn toggle${item.available===false?'':' on'}" onclick="toggleAvailability(${ci},${ii})">${item.available===false?'Off':'On'}</button>
+          <button class="mir-btn edit" onclick="openItemEdit(${ci},${ii})">✏️</button>
+          <button class="mir-btn del" onclick="deleteItem(${ci},${ii})">🗑️</button>
+        </div>`;
+      block.appendChild(row);
+    });
+    body.appendChild(block);
+  });
+
+  // Save all button
+  const saveBtn=document.createElement('button');
+  saveBtn.className='btn btn-g';
+  saveBtn.style.cssText='width:100%;justify-content:center;border-radius:9px;padding:12px;margin-top:6px';
+  saveBtn.innerHTML='💾 Save All Changes to Firebase';
+  saveBtn.onclick=saveMenuToFirebase;
+  body.appendChild(saveBtn);
+}
+
+function toggleAvailability(ci,ii){
+  _menuDraft[ci].items[ii].available=(_menuDraft[ci].items[ii].available===false)?true:false;
+  renderMenuMgmt();
+}
+
+function deleteItem(ci,ii){
+  if(!confirm(`Delete "${_menuDraft[ci].items[ii].name}"?`))return;
+  _menuDraft[ci].items.splice(ii,1);
+  renderMenuMgmt();
+}
+
+function addNewItem(ci){
+  openItemEdit(ci,-1); // -1 = new item
+}
+
+function openItemEdit(ci,ii){
+  document.getElementById('ie-cat').value=ci;
+  document.getElementById('ie-idx').value=ii;
+  const titleEl=document.getElementById('item-edit-title');
+  if(ii===-1){
+    titleEl.textContent='+ Add New Item';
+    document.getElementById('ie-name').value='';
+    document.getElementById('ie-desc').value='';
+    document.getElementById('ie-price').value='';
+    document.getElementById('ie-emoji').value='';
+    _editAvail=true;
+  } else {
+    const item=_menuDraft[ci].items[ii];
+    titleEl.textContent='✏️ Edit Item';
+    document.getElementById('ie-name').value=item.name||'';
+    document.getElementById('ie-desc').value=item.desc||'';
+    document.getElementById('ie-price').value=item.price||'';
+    document.getElementById('ie-emoji').value=item.emoji||'';
+    _editAvail=item.available!==false;
+  }
+  updateAvailToggle();
+  document.getElementById('item-edit-modal').classList.add('open');
+}
+
+function closeItemEdit(){document.getElementById('item-edit-modal').classList.remove('open');}
+
+function toggleItemAvail(){
+  _editAvail=!_editAvail;
+  updateAvailToggle();
+}
+function updateAvailToggle(){
+  const track=document.getElementById('ie-avail-track');
+  const lbl=document.getElementById('ie-avail-lbl');
+  track.classList.toggle('on',_editAvail);
+  lbl.textContent=_editAvail?'Available':'Unavailable (hidden from customers)';
+}
+
+function saveItemEdit(){
+  const ci=parseInt(document.getElementById('ie-cat').value);
+  const ii=parseInt(document.getElementById('ie-idx').value);
+  const name=document.getElementById('ie-name').value.trim();
+  const desc=document.getElementById('ie-desc').value.trim();
+  const price=parseInt(document.getElementById('ie-price').value);
+  const emoji=document.getElementById('ie-emoji').value.trim();
+
+  if(!name){showToast('Item name is required','err');return;}
+  if(!price||price<1){showToast('Enter a valid price','err');return;}
+
+  const newItem={name,desc,price,emoji:emoji||'🍽️',available:_editAvail};
+
+  if(ii===-1){
+    _menuDraft[ci].items.push(newItem);
+  } else {
+    _menuDraft[ci].items[ii]=newItem;
+  }
+  closeItemEdit();
+  renderMenuMgmt();
+  showToast('Item updated — tap Save All to push to Firebase','ok');
+}
+
+async function saveMenuToFirebase(){
+  if(!window._fbReady||!window._db){showToast('Firebase not connected','err');return;}
+  const rid=_session.rid;
+  try{
+    await update(ref(window._db,'zk_restaurants/'+rid),{
+      menu:_menuDraft,
+      updatedAt:new Date().toISOString()
+    });
+    // Update local restaurantMap so ordering works immediately
+    if(restaurantMap[rid])restaurantMap[rid].menu=JSON.parse(JSON.stringify(_menuDraft));
+    showToast('✅ Menu saved to Firebase!','ok');
+    closeMenuMgmt();
+  }catch(e){
+    console.error(e);
+    showToast('Failed to save menu — check Firebase rules','err');
+  }
+}
+
+// Load menu from Firebase when opening restaurant menu page
+// Override openMenu to check Firebase for updated menu first
+const _originalOpenMenu=openMenu;
+window.openMenu=async function(rid){
+  // Try to get updated menu from Firebase
+  if(window._fbReady&&window._db){
+    try{
+      const snap=await get(ref(window._db,'zk_restaurants/'+rid));
+      if(snap.exists()&&snap.val().menu){
+        restaurantMap[rid].menu=snap.val().menu;
+      }
+    }catch(e){console.warn('Menu fetch failed, using default');}
+  }
+  _originalOpenMenu(rid);
+};
+
 </script>
 </body>
 </html>
