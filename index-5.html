@@ -553,6 +553,10 @@ select.fi{cursor:pointer;appearance:none;background-image:url("data:image/svg+xm
         <div class="pin-dot" id="pd1"></div>
         <div class="pin-dot" id="pd2"></div>
         <div class="pin-dot" id="pd3"></div>
+        <div class="pin-dot" id="pd4"></div>
+        <div class="pin-dot" id="pd5"></div>
+        <div class="pin-dot" id="pd6"></div>
+        <div class="pin-dot" id="pd7"></div>
       </div>
       <div class="numpad">
         <div class="nk" onclick="pinKey('1')">1</div>
@@ -567,9 +571,10 @@ select.fi{cursor:pointer;appearance:none;background-image:url("data:image/svg+xm
         <div class="nk del" onclick="pinKey('clear')">✕ Clear</div>
         <div class="nk" onclick="pinKey('0')">0</div>
         <div class="nk del" onclick="pinKey('back')">⌫</div>
+
       </div>
       <div class="login-err" id="login-err"></div>
-      <div class="login-hint">Admin PIN: <strong>0000</strong> &nbsp;|&nbsp; Restaurant PIN: your assigned number</div>
+      <div class="login-hint">Restaurant PIN: your assigned number &nbsp;|&nbsp; Admin: contact platform owner</div>
     </div>
   </div>
 </div>
@@ -793,7 +798,7 @@ const PLATFORM_FEE_RATE=0.05;
 const DELIVERY_ZONES=[{label:'Zone 1',range:'0–2 km',fee:2000},{label:'Zone 2',range:'2–5 km',fee:4000},{label:'Zone 3',range:'5–10 km',fee:7000}];
 const STATUS_FLOW=['Order Received','Preparing','Ready','Delivered'];
 const STATUS_COLORS={'Order Received':'var(--blue)','Preparing':'var(--orange)','Ready':'var(--gold)','Delivered':'var(--green)','Cancelled':'var(--red)'};
-const ADMIN_PIN='0000';
+const ADMIN_PIN='48291736';
 
 // ═══════════════════════════════════════════════════════
 // SESSION — who is logged in
@@ -886,48 +891,84 @@ function updateNavUI(){
 function pinKey(k){
   if(k==='clear'){_pinBuffer='';updatePinDots();document.getElementById('login-err').textContent='';return;}
   if(k==='back'){_pinBuffer=_pinBuffer.slice(0,-1);updatePinDots();return;}
-  if(_pinBuffer.length>=4)return;
+  if(_pinBuffer.length>=8)return;
   _pinBuffer+=k;
   updatePinDots();
-  if(_pinBuffer.length===4)setTimeout(submitPin,150);
+  setTimeout(submitPin,150);
 }
 function updatePinDots(){
-  for(let i=0;i<4;i++){
+  for(let i=0;i<8;i++){
     const d=document.getElementById('pd'+i);
     if(d)d.classList.toggle('filled',i<_pinBuffer.length);
   }
 }
 async function submitPin(){
   const pin=_pinBuffer;
-  _pinBuffer='';updatePinDots();
   const errEl=document.getElementById('login-err');
-  errEl.textContent='Checking…';
+  errEl.textContent='';
 
-  let result=null;
-  if(window.verifyPin){
-    result=await window.verifyPin(pin);
-  } else {
-    // Fallback local check
-    if(pin===ADMIN_PIN)result={role:'admin',rid:null,name:'Admin'};
-    else{
-      const localPins={'1001':'rest_001','1002':'rest_002','1003':'rest_003','1004':'rest_004','1005':'rest_005','1006':'rest_006','1007':'rest_007','1008':'rest_008','1009':'rest_009','1010':'rest_010'};
-      if(localPins[pin]){const r=restaurantMap[localPins[pin]];result={role:'restaurant',rid:localPins[pin],name:r?r.name:'Restaurant'};}
-    }
+  const localPins={
+    '1001':'rest_001','1002':'rest_002','1003':'rest_003',
+    '1004':'rest_004','1005':'rest_005','1006':'rest_006',
+    '1007':'rest_007','1008':'rest_008','1009':'rest_009','1010':'rest_010'
+  };
+
+  // If 4 digits — only accept if it matches a restaurant PIN
+  // If less than 4 or between 4-8 and not a restaurant PIN — wait for more digits
+  if(pin.length<4)return;
+
+  // Check restaurant PINs at exactly 4 digits
+  if(pin.length===4&&localPins[pin]){
+    const r=restaurantMap[localPins[pin]];
+    const result={role:'restaurant',rid:localPins[pin],name:r?r.name:'Restaurant'};
+    _pinBuffer='';updatePinDots();
+    saveSession(result);updateNavUI();
+    showToast('✅ Welcome, '+result.name+'!','ok');
+    showPage('page-rest-dashboard');
+    return;
   }
 
-  if(result){
-    saveSession(result);
+  // If 4 digits but not a restaurant PIN — could be start of longer admin PIN, keep going
+  if(pin.length<8&&pin!==ADMIN_PIN)return;
+
+  // At 8 digits OR exact admin PIN match — check admin
+  if(pin===ADMIN_PIN){
+    _pinBuffer='';updatePinDots();
+    saveSession({role:'admin',rid:null,name:'Admin'});
     updateNavUI();
-    errEl.textContent='';
-    showToast(`✅ Welcome, ${result.name}!`,'ok');
-    if(result.role==='admin')showPage('page-dashboard');
-    else showPage('page-rest-dashboard');
-  } else {
+    showToast('✅ Welcome, Admin!','ok');
+    showPage('page-dashboard');
+    return;
+  }
+
+  // At 8 digits and not admin — check Firebase for custom PINs
+  if(pin.length===8&&window._fbReady&&window._db){
+    errEl.textContent='Checking…';
+    try{
+      const{collection,query,where,getDocs}=window._fb;
+      const q=query(collection(window._db,'zk_restaurants'),where('pin','==',pin));
+      const snap=await getDocs(q);
+      if(!snap.empty){
+        const d=snap.docs[0].data();
+        _pinBuffer='';updatePinDots();
+        errEl.textContent='';
+        saveSession({role:'restaurant',rid:d.rid,name:d.name});
+        updateNavUI();
+        showToast('✅ Welcome, '+d.name+'!','ok');
+        showPage('page-rest-dashboard');
+        return;
+      }
+    }catch(e){console.warn('Firebase check failed:',e);}
+  }
+
+  // Wrong PIN
+  if(pin.length>=8||localPins[pin]!==undefined){
+    _pinBuffer='';updatePinDots();
     errEl.textContent='❌ Wrong PIN. Please try again.';
-    const input=document.querySelector('.numpad');
-    if(input){input.style.animation='none';setTimeout(()=>{},10);}
-    // Shake all numpad
-    document.querySelectorAll('.pin-dot').forEach(d=>{d.style.borderColor='var(--red)';setTimeout(()=>{d.style.borderColor='';},800);});
+    document.querySelectorAll('.pin-dot').forEach(d=>{
+      d.style.borderColor='var(--red)';
+      setTimeout(()=>{d.style.borderColor='';},800);
+    });
   }
 }
 
