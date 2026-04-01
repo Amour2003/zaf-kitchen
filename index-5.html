@@ -1,0 +1,1455 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>ZAF KITCHEN</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet"/>
+<script type="module">
+import{initializeApp}from"https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import{getFirestore,collection,addDoc,onSnapshot,doc,updateDoc,getDoc,setDoc,query,orderBy,where,serverTimestamp}from"https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+const firebaseConfig={
+  apiKey:"AIzaSyAJMbxBOTlpY8d-gYTJm_gMV1PELsWXsNM",
+  authDomain:"urbaneatstz.firebaseapp.com",
+  projectId:"urbaneatstz",
+  storageBucket:"urbaneatstz.firebasestorage.app",
+  messagingSenderId:"964854970014",
+  appId:"1:964854970014:web:58963fd2b12aeb95eaed8f",
+  measurementId:"G-78JNNR7B47"
+};
+
+try{
+  const app=initializeApp(firebaseConfig);
+  const db=getFirestore(app);
+  window._db=db;window._fbReady=true;
+  window._fb={collection,addDoc,onSnapshot,doc,updateDoc,getDoc,setDoc,query,orderBy,where,serverTimestamp};
+  const s=document.getElementById('db-status');
+  if(s){s.textContent='🟢 Live DB';s.style.color='var(--green)';}
+
+  /* Live orders listener */
+  const q=query(collection(db,'zk_orders'),orderBy('timestamp','desc'));
+  onSnapshot(q,snap=>{
+    window._allOrders=snap.docs.map(d=>({id:d.id,...d.data()}));
+    const cp=window._curPage||'';
+    if(cp==='page-dashboard')window.loadAdminDashboard&&window.loadAdminDashboard();
+    if(cp==='page-rest-dashboard')window.loadRestDashboard&&window.loadRestDashboard();
+    if(window._trackingOrderId)window.refreshTracker&&window.refreshTracker(window._trackingOrderId);
+  });
+
+  /* Seed default restaurant PINs if not yet in Firestore */
+  window.seedRestaurantPins=async function(){
+    const rests=[
+      {rid:'rest_001',name:'Awery Kitchen',pin:'1001'},
+      {rid:'rest_002',name:'Zanzibar Grill House',pin:'1002'},
+      {rid:'rest_003',name:'Kilimanjaro Kitchen',pin:'1003'},
+      {rid:'rest_004',name:'Kariakoo Nyama Choma',pin:'1004'},
+      {rid:'rest_005',name:'Msasani Sushi & Asian',pin:'1005'},
+      {rid:'rest_006',name:'Dar Bakery & Cafe',pin:'1006'},
+      {rid:'rest_007',name:'Ocean View Seafood',pin:'1007'},
+      {rid:'rest_008',name:'Mama Africa Kitchen',pin:'1008'},
+      {rid:'rest_009',name:'Azul Restaurant',pin:'1009'},
+      {rid:'rest_010',name:'Bachelor Restaurant',pin:'1010'},
+    ];
+    for(const r of rests){
+      const ref=doc(db,'zk_restaurants',r.rid);
+      const snap=await getDoc(ref);
+      if(!snap.exists()){
+        await setDoc(ref,{rid:r.rid,name:r.name,pin:r.pin,createdAt:new Date().toISOString()});
+      }
+    }
+    window.showToast&&window.showToast('✅ Restaurant PINs seeded to Firebase','ok');
+  };
+
+  /* Verify PIN — returns role object or null */
+  window.verifyPin=async function(pin){
+    const ADMIN_PIN='0000';
+    if(pin===ADMIN_PIN)return{role:'admin',rid:null,name:'Admin'};
+    const{collection,query,where,onSnapshot}=window._fb;
+    return new Promise(resolve=>{
+      const q2=query(collection(db,'zk_restaurants'),where('pin','==',pin));
+      onSnapshot(q2,snap=>{
+        if(!snap.empty){
+          const d=snap.docs[0].data();
+          resolve({role:'restaurant',rid:d.rid,name:d.name});
+        } else {
+          resolve(null);
+        }
+      },{onError:()=>resolve(null)});
+    });
+  };
+
+}catch(e){
+  window._fbReady=false;
+  const s=document.getElementById('db-status');
+  if(s){s.textContent='🟡 Local Mode';s.style.color='var(--gold)';}
+}
+
+/* Save order */
+window.saveOrder=async function(data){
+  if(window._fbReady&&window._db){
+    const{collection,addDoc,serverTimestamp}=window._fb;
+    const ref=await addDoc(collection(window._db,'zk_orders'),{...data,timestamp:serverTimestamp()});
+    return ref.id;
+  }
+  const local=JSON.parse(localStorage.getItem('zk_orders')||'[]');
+  const id='loc_'+Date.now();
+  local.unshift({id,...data,timestamp:new Date().toISOString()});
+  localStorage.setItem('zk_orders',JSON.stringify(local));
+  window._allOrders=local;
+  return id;
+};
+
+/* Update order status */
+window.updateOrderStatus=async function(orderId,newStatus){
+  if(window._fbReady&&window._db){
+    const{doc,updateDoc}=window._fb;
+    await updateDoc(doc(window._db,'zk_orders',orderId),{status:newStatus,updatedAt:new Date().toISOString()});
+    return;
+  }
+  const local=JSON.parse(localStorage.getItem('zk_orders')||'[]');
+  const i=local.findIndex(o=>o.id===orderId);
+  if(i>=0){local[i].status=newStatus;localStorage.setItem('zk_orders',JSON.stringify(local));}
+  window._allOrders=local;
+  window.loadAdminDashboard&&window.loadAdminDashboard();
+  window.loadRestDashboard&&window.loadRestDashboard();
+};
+
+/* Update restaurant PIN */
+window.updateRestPin=async function(rid,newPin){
+  if(!window._fbReady||!window._db)return false;
+  const{doc,updateDoc}=window._fb;
+  await updateDoc(doc(window._db,'zk_restaurants',rid),{pin:newPin});
+  return true;
+};
+</script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --green:#1DB954;--green-dark:#17a347;--green-dim:rgba(29,185,84,.1);
+  --orange:#FF6B35;--gold:#F59E0B;--red:#EF4444;--blue:#3B82F6;--purple:#8B5CF6;
+  --bg:#0a0a0a;--surface:#161616;--surface2:#1e1e1e;--surface3:#272727;
+  --border:rgba(255,255,255,.07);--border2:rgba(255,255,255,.13);
+  --text:#f0f0f0;--muted:#777;--muted2:#444;
+  --radius:14px;--radius-sm:9px;
+  --font-h:'Syne',sans-serif;--font-b:'DM Sans',sans-serif;
+  --shadow:0 12px 40px rgba(0,0,0,.6);
+}
+html{scroll-behavior:smooth}
+body{font-family:var(--font-b);background:var(--bg);color:var(--text);min-height:100vh;overflow-x:hidden;-webkit-font-smoothing:antialiased}
+::-webkit-scrollbar{width:4px}::-webkit-scrollbar-track{background:var(--bg)}::-webkit-scrollbar-thumb{background:var(--surface3);border-radius:4px}
+
+/* NAV */
+nav{position:sticky;top:0;z-index:100;background:rgba(10,10,10,.95);backdrop-filter:blur(20px);border-bottom:1px solid var(--border);padding:0 20px;display:flex;align-items:center;justify-content:space-between;height:58px}
+.logo{font-family:var(--font-h);font-size:17px;font-weight:800;color:var(--green);letter-spacing:.5px;cursor:pointer}
+.logo span{color:var(--text)}
+.nav-right{display:flex;align-items:center;gap:7px}
+.nbtn{display:flex;align-items:center;gap:5px;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:7px 13px;border-radius:50px;cursor:pointer;font-family:var(--font-b);font-size:12px;font-weight:500;transition:all .18s;white-space:nowrap}
+.nbtn:hover{border-color:var(--green);color:var(--green)}
+.nbtn.g{background:var(--green);color:#000;border-color:var(--green);font-weight:700}
+.nbtn.g:hover{background:var(--green-dark)}
+.nbtn.red{background:rgba(239,68,68,.12);border-color:rgba(239,68,68,.3);color:var(--red)}
+.nbtn.red:hover{background:var(--red);color:#fff}
+#cart-count{background:#000;color:var(--green);border-radius:50%;width:18px;height:18px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700}
+#db-status{font-size:10px;font-weight:600;padding:3px 9px;background:var(--surface2);border:1px solid var(--border);border-radius:50px;color:var(--muted)}
+#role-badge{font-size:10px;font-weight:700;padding:3px 10px;border-radius:50px;display:none}
+#role-badge.admin{background:rgba(139,92,246,.15);border:1px solid rgba(139,92,246,.4);color:var(--purple)}
+#role-badge.restaurant{background:rgba(245,158,11,.12);border:1px solid rgba(245,158,11,.35);color:var(--gold)}
+
+/* PAGES */
+.page{display:none;animation:fu .22s ease}.page.active{display:block}
+@keyframes fu{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:translateY(0)}}
+
+/* HERO */
+.hero{padding:64px 20px 40px;text-align:center;position:relative;overflow:hidden}
+.hero::before{content:'';position:absolute;inset:0;background:radial-gradient(ellipse 60% 50% at 50% -5%,rgba(29,185,84,.14) 0%,transparent 70%);pointer-events:none}
+.badge{display:inline-flex;align-items:center;gap:6px;background:rgba(29,185,84,.09);border:1px solid rgba(29,185,84,.22);border-radius:50px;padding:5px 13px;font-size:12px;color:var(--green);font-weight:500;margin-bottom:18px}
+.hero h1{font-family:var(--font-h);font-size:clamp(30px,7vw,56px);font-weight:800;line-height:1.07;letter-spacing:-2px;margin-bottom:14px}
+.hero h1 em{font-style:normal;color:var(--green)}
+.hero p{font-size:15px;color:var(--muted);max-width:420px;margin:0 auto 28px;line-height:1.7}
+.hbtns{display:flex;gap:10px;justify-content:center;flex-wrap:wrap}
+.btn{display:inline-flex;align-items:center;gap:7px;padding:11px 22px;border-radius:50px;font-family:var(--font-b);font-size:13px;font-weight:600;cursor:pointer;border:none;transition:all .18s}
+.btn-g{background:var(--green);color:#000}.btn-g:hover{background:var(--green-dark);transform:translateY(-1px)}
+.btn-o{background:transparent;color:var(--text);border:1px solid var(--border2)}.btn-o:hover{border-color:var(--green);color:var(--green)}
+
+/* STATS */
+.stats{display:flex;justify-content:center;border-top:1px solid var(--border);border-bottom:1px solid var(--border);margin-bottom:44px}
+.stat{flex:1;max-width:140px;padding:14px 8px;text-align:center;border-right:1px solid var(--border)}.stat:last-child{border-right:none}
+.stat-n{font-family:var(--font-h);font-size:20px;font-weight:800;color:var(--green)}
+.stat-l{font-size:11px;color:var(--muted);margin-top:2px}
+
+/* SEC */
+.sec{padding:0 20px 44px;max-width:1140px;margin:0 auto}
+.sec-hd{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}
+.sec-t{font-family:var(--font-h);font-size:18px;font-weight:700}
+.lbtn{font-size:12px;color:var(--green);background:none;border:none;cursor:pointer;font-family:var(--font-b);font-weight:500}.lbtn:hover{text-decoration:underline}
+
+/* RESTAURANT GRID */
+.rgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(265px,1fr));gap:14px}
+.rcard{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;cursor:pointer;transition:all .22s}
+.rcard:hover{border-color:rgba(29,185,84,.38);transform:translateY(-3px);box-shadow:0 16px 36px rgba(0,0,0,.5)}
+.rc-img{width:100%;height:150px;display:flex;align-items:center;justify-content:center;background:var(--surface2);font-size:48px;position:relative}
+.rc-badge{position:absolute;top:9px;left:9px;background:rgba(0,0,0,.8);backdrop-filter:blur(8px);border-radius:50px;padding:3px 10px;font-size:10px;font-weight:600;color:#fff}
+.rc-body{padding:13px}
+.rc-name{font-family:var(--font-h);font-size:15px;font-weight:700;margin-bottom:2px}
+.rc-cuisine{font-size:11px;color:var(--muted);margin-bottom:7px}
+.rc-desc{font-size:11px;color:#aaa;line-height:1.5;margin-bottom:9px}
+.rc-meta{display:flex;gap:9px;flex-wrap:wrap;font-size:11px;color:var(--muted);margin-bottom:8px}
+.rc-rid{font-size:10px;color:var(--gold);background:rgba(245,158,11,.1);border-radius:50px;padding:2px 8px;display:inline-block;margin-bottom:8px}
+.vmbtn{width:100%;background:var(--green);color:#000;border:none;padding:9px;border-radius:var(--radius-sm);font-family:var(--font-b);font-size:13px;font-weight:600;cursor:pointer;transition:background .18s}
+.vmbtn:hover{background:var(--green-dark)}
+
+/* PAGE HEADER */
+.ph{padding:26px 20px 0;max-width:1140px;margin:0 auto}
+.back-btn{display:inline-flex;align-items:center;gap:5px;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:7px 15px;border-radius:50px;font-family:var(--font-b);font-size:12px;font-weight:500;cursor:pointer;transition:all .18s;margin-bottom:18px}
+.back-btn:hover{border-color:var(--green);color:var(--green)}
+.pt{font-family:var(--font-h);font-size:clamp(22px,5vw,34px);font-weight:800;letter-spacing:-1px;margin-bottom:4px}
+.ps{font-size:13px;color:var(--muted);margin-bottom:18px}
+
+/* SEARCH */
+.sw{position:relative;max-width:420px;margin-bottom:26px}
+.sw svg{position:absolute;left:13px;top:50%;transform:translateY(-50%);color:var(--muted)}
+#rsearch{width:100%;background:var(--surface);border:1px solid var(--border);border-radius:50px;padding:11px 16px 11px 40px;font-family:var(--font-b);font-size:13px;color:var(--text);outline:none;transition:border-color .18s}
+#rsearch::placeholder{color:var(--muted)}#rsearch:focus{border-color:var(--green)}
+.no-res{text-align:center;padding:60px 20px;color:var(--muted)}
+
+/* MENU */
+.menu-hero{display:flex;align-items:flex-start;gap:14px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px;margin-bottom:24px}
+.mh-icon{font-size:42px;flex-shrink:0}
+.mh-name{font-family:var(--font-h);font-size:20px;font-weight:800;margin-bottom:2px}
+.mh-meta{font-size:12px;color:var(--muted);margin-bottom:3px}
+.mh-addr{font-size:11px;color:var(--muted)}.mh-hours{font-size:11px;color:var(--green)}
+.mc-title{font-family:var(--font-h);font-size:14px;font-weight:700;margin:22px 0 10px;padding-bottom:8px;border-bottom:1px solid var(--border)}
+.mi-list{display:flex;flex-direction:column;gap:9px}
+.mi{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:13px 14px;display:flex;align-items:center;gap:12px;transition:border-color .18s}
+.mi:hover{border-color:rgba(29,185,84,.22)}
+.mi-img{width:58px;height:58px;border-radius:var(--radius-sm);background:var(--surface2);flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:26px}
+.mi-info{flex:1;min-width:0}
+.mi-name{font-weight:600;font-size:13px;margin-bottom:2px}
+.mi-desc{font-size:11px;color:var(--muted);line-height:1.4}
+.mi-right{display:flex;flex-direction:column;align-items:flex-end;gap:7px;flex-shrink:0}
+.mi-price{font-family:var(--font-h);font-size:14px;font-weight:700;color:var(--green)}
+.mi-qty{font-size:11px;color:var(--green);font-weight:600;background:var(--green-dim);border-radius:50px;padding:2px 7px}
+.add-btn{background:var(--green);color:#000;border:none;width:30px;height:30px;border-radius:50%;font-size:17px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .18s}
+.add-btn:hover{background:var(--green-dark);transform:scale(1.1)}
+
+/* CART */
+.cart-ov{display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:200;backdrop-filter:blur(4px)}.cart-ov.open{display:block}
+.cart-p{position:fixed;top:0;right:0;width:min(375px,100vw);height:100vh;background:var(--surface);border-left:1px solid var(--border);display:flex;flex-direction:column;transform:translateX(100%);transition:transform .3s cubic-bezier(.4,0,.2,1);z-index:201}.cart-p.open{transform:translateX(0)}
+.cart-hd{padding:16px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+.cart-hd-t{font-family:var(--font-h);font-size:16px;font-weight:700}
+.ic-btn{background:var(--surface2);border:1px solid var(--border);color:var(--text);width:30px;height:30px;border-radius:50%;cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;transition:all .18s}.ic-btn:hover{border-color:var(--red);color:var(--red)}
+.cart-list{flex:1;overflow-y:auto;padding:14px 18px}
+.ce{text-align:center;padding:48px 0;color:var(--muted)}.ce-ic{font-size:38px;margin-bottom:8px}
+.ci{display:flex;align-items:center;gap:9px;padding:11px 0;border-bottom:1px solid var(--border)}
+.ci-info{flex:1;min-width:0}.ci-name{font-weight:600;font-size:12px;line-height:1.3}.ci-from{font-size:10px;color:var(--muted)}
+.ci-right{display:flex;align-items:center;gap:7px;flex-shrink:0}.ci-price{font-weight:700;color:var(--green);font-size:12px}
+.qc{display:flex;align-items:center;gap:5px}
+.qb{background:var(--surface3);border:none;color:var(--text);width:22px;height:22px;border-radius:50%;font-size:13px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background .15s}.qb:hover{background:var(--green);color:#000}
+.qn{font-size:12px;font-weight:600;min-width:14px;text-align:center}
+.cart-ft{padding:14px 18px;border-top:1px solid var(--border)}
+.fr{display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--muted);margin-bottom:5px}.fr .fv{color:var(--text);font-weight:500}
+.fr.del-r .fv{color:var(--orange)}.fr.plat .fv{color:var(--gold)}
+.tr{display:flex;justify-content:space-between;align-items:center;font-family:var(--font-h);font-size:16px;font-weight:800;margin:9px 0 13px;padding-top:9px;border-top:1px solid var(--border)}
+.co-btn{width:100%;background:var(--green);color:#000;border:none;padding:12px;border-radius:var(--radius-sm);font-family:var(--font-b);font-size:13px;font-weight:700;cursor:pointer;transition:background .18s;display:flex;align-items:center;justify-content:center;gap:7px}.co-btn:hover{background:var(--green-dark)}
+.cl-btn{width:100%;margin-top:7px;background:none;border:1px solid var(--border);color:var(--muted);padding:8px;border-radius:var(--radius-sm);font-family:var(--font-b);font-size:12px;cursor:pointer;transition:all .18s}.cl-btn:hover{border-color:var(--red);color:var(--red)}
+
+/* MODAL */
+.mbg{display:none;position:fixed;inset:0;background:rgba(0,0,0,.78);z-index:300;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(6px)}.mbg.open{display:flex}
+.modal{background:var(--surface);border:1px solid var(--border2);border-radius:18px;padding:26px;width:100%;max-width:450px;position:relative;max-height:90vh;overflow-y:auto}
+.m-title{font-family:var(--font-h);font-size:19px;font-weight:800;margin-bottom:18px}
+.m-close{position:absolute;top:13px;right:13px;background:var(--surface2);border:1px solid var(--border);color:var(--text);width:28px;height:28px;border-radius:50%;cursor:pointer;font-size:13px;display:flex;align-items:center;justify-content:center;transition:all .18s}.m-close:hover{border-color:var(--red);color:var(--red)}
+.fg{margin-bottom:12px}
+.fl{font-size:11px;color:var(--muted);margin-bottom:4px;display:block;font-weight:500}
+.fi{width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 13px;color:var(--text);font-family:var(--font-b);font-size:13px;outline:none;transition:border-color .18s}
+.fi:focus{border-color:var(--green)}.fi::placeholder{color:var(--muted2)}.fi.err{border-color:var(--red)}
+select.fi{cursor:pointer;appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%23777' viewBox='0 0 16 16'%3E%3Cpath d='M7.247 11.14L2.451 5.658C1.885 5.013 2.345 4 3.204 4h9.592a1 1 0 0 1 .753 1.659l-4.796 5.48a1 1 0 0 1-1.506 0z'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;padding-right:30px}
+
+/* DELIVERY TOGGLE */
+.del-toggle{display:flex;gap:8px;margin-bottom:12px}
+.dt-opt{flex:1;padding:11px;text-align:center;background:var(--surface2);border:2px solid var(--border);border-radius:var(--radius-sm);cursor:pointer;transition:all .18s;font-size:12px;font-weight:600}.dt-opt:hover{border-color:var(--border2)}.dt-opt.sel{border-color:var(--green);background:var(--green-dim)}
+
+/* ZONE GRID */
+#zone-section{display:none}
+.zone-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:6px}
+.zone-card{padding:11px 8px;text-align:center;background:var(--surface2);border:2px solid var(--border);border-radius:var(--radius-sm);cursor:pointer;transition:all .18s}.zone-card:hover{border-color:var(--border2)}.zone-card.sel{border-color:var(--orange);background:rgba(255,107,53,.1)}
+.zi{font-size:17px;margin-bottom:3px}.zn{font-size:11px;font-weight:700}.zd{font-size:10px;color:var(--muted);margin-top:1px}.zf{font-size:12px;font-weight:700;color:var(--orange);margin-top:3px}
+
+/* PAY OPTS */
+.pay-opts{display:flex;gap:9px;margin-bottom:13px}
+.po{flex:1;padding:13px 10px;text-align:center;background:var(--surface2);border:2px solid var(--border);border-radius:var(--radius-sm);cursor:pointer;transition:all .18s}.po:hover{border-color:var(--border2)}.po.sel{border-color:var(--green);background:var(--green-dim)}
+.po-ic{font-size:20px;margin-bottom:3px}.po-lb{font-size:12px;font-weight:600}.po-sub{font-size:10px;color:var(--muted);margin-top:2px}
+
+/* ORDER SUMMARY */
+.os{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:13px;margin-bottom:14px}
+.os-t{font-size:10px;color:var(--muted);font-weight:600;margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px}
+.os-item{display:flex;justify-content:space-between;font-size:11px;padding:2px 0}.os-item .n{color:var(--text)}.os-item .p{color:var(--muted)}
+.os-div{border:none;border-top:1px solid var(--border);margin:7px 0}
+.os-row{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);padding:2px 0}.os-row .v{color:var(--text)}.os-row.del .v{color:var(--orange)}.os-row.plat .v{color:var(--gold)}
+.os-total{display:flex;justify-content:space-between;font-family:var(--font-h);font-size:15px;font-weight:800;padding-top:7px;margin-top:4px;border-top:1px solid var(--border)}
+
+/* PAY PROCESSING */
+.pay-st{text-align:center;padding:30px 0}
+.spinner{width:42px;height:42px;margin:0 auto 14px;border:3px solid var(--border2);border-top-color:var(--green);border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.pst-icon{font-size:42px;margin-bottom:12px}.pst-title{font-family:var(--font-h);font-size:17px;font-weight:700;margin-bottom:5px}.pst-sub{font-size:12px;color:var(--muted);margin-bottom:18px}
+
+/* ADD RESTAURANT */
+.ar-wrap{max-width:500px;margin:0 auto;padding:0 20px 60px}
+.ar-card{background:var(--surface);border:1px solid var(--border);border-radius:18px;padding:26px}
+.ar-hdr{text-align:center;margin-bottom:24px}.ar-icon{font-size:42px;margin-bottom:8px}.ar-title{font-family:var(--font-h);font-size:20px;font-weight:800;margin-bottom:5px}.ar-sub{font-size:13px;color:var(--muted);line-height:1.6}
+.ar-benefits{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin:18px 0}
+.ben{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:11px}.ben-ic{font-size:17px;margin-bottom:3px}.ben-t{font-size:11px;font-weight:600;margin-bottom:2px}.ben-d{font-size:10px;color:var(--muted)}
+.sub-btn{width:100%;background:var(--green);color:#000;border:none;padding:13px;border-radius:var(--radius-sm);font-family:var(--font-b);font-size:14px;font-weight:700;cursor:pointer;transition:all .18s;margin-top:6px}.sub-btn:hover{background:var(--green-dark)}
+.suc{text-align:center;padding:18px 0}.suc-ic{font-size:50px;margin-bottom:12px}.suc-t{font-family:var(--font-h);font-size:19px;font-weight:800;margin-bottom:7px;color:var(--green)}.suc-s{font-size:13px;color:var(--muted);line-height:1.65}
+
+/* FOOTER */
+.div{height:1px;background:var(--border)}
+.footer{border-top:1px solid var(--border);padding:28px 20px;text-align:center}
+.fl-links{display:flex;justify-content:center;gap:18px;margin-bottom:10px;flex-wrap:wrap}
+.fl-link{font-size:12px;color:var(--muted);cursor:pointer;background:none;border:none;font-family:var(--font-b)}.fl-link:hover{color:var(--green)}
+.fc{font-size:11px;color:var(--muted2)}
+
+/* TOAST */
+.toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--surface);border:1px solid var(--border2);color:var(--text);padding:9px 16px;border-radius:50px;font-size:12px;font-weight:500;z-index:9999;opacity:0;transition:opacity .25s;white-space:nowrap;box-shadow:var(--shadow)}.toast.show{opacity:1}.toast.ok{border-color:var(--green)}.toast.err{border-color:var(--red)}
+
+/* ══════════ LOGIN PAGE ══════════ */
+.login-wrap{min-height:calc(100vh - 58px);display:flex;align-items:center;justify-content:center;padding:20px}
+.login-card{background:var(--surface);border:1px solid var(--border2);border-radius:20px;padding:36px 32px;width:100%;max-width:380px;text-align:center}
+.login-icon{font-size:52px;margin-bottom:16px}
+.login-title{font-family:var(--font-h);font-size:24px;font-weight:800;margin-bottom:6px}
+.login-sub{font-size:13px;color:var(--muted);margin-bottom:28px;line-height:1.6}
+.pin-input{width:100%;background:var(--surface2);border:2px solid var(--border);border-radius:var(--radius-sm);padding:14px;color:var(--text);font-family:var(--font-h);font-size:28px;font-weight:700;text-align:center;outline:none;letter-spacing:8px;transition:border-color .18s}
+.pin-input:focus{border-color:var(--green)}
+.pin-input.err-shake{border-color:var(--red);animation:shake .3s ease}
+@keyframes shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-6px)}75%{transform:translateX(6px)}}
+.login-btn{width:100%;background:var(--green);color:#000;border:none;padding:13px;border-radius:var(--radius-sm);font-family:var(--font-b);font-size:14px;font-weight:700;cursor:pointer;transition:all .18s;margin-top:14px}.login-btn:hover{background:var(--green-dark)}
+.login-hint{font-size:11px;color:var(--muted);margin-top:14px;line-height:1.6}
+.login-err{font-size:12px;color:var(--red);margin-top:10px;min-height:18px}
+.pin-dots{display:flex;justify-content:center;gap:10px;margin:16px 0}
+.pin-dot{width:14px;height:14px;border-radius:50%;background:var(--surface3);border:2px solid var(--border);transition:all .15s}
+.pin-dot.filled{background:var(--green);border-color:var(--green)}
+.numpad{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:16px}
+.nk{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:16px;font-family:var(--font-h);font-size:20px;font-weight:700;cursor:pointer;transition:all .15s;color:var(--text)}.nk:hover{background:var(--surface3);border-color:var(--border2)}.nk:active{transform:scale(.94)}
+.nk.del{font-size:16px;color:var(--muted)}
+
+/* ══════════ DASHBOARD SHARED ══════════ */
+.db-wrap{max-width:1100px;margin:0 auto;padding:0 20px 60px}
+.setup-banner{background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.3);border-radius:var(--radius-sm);padding:12px 16px;margin-bottom:20px;font-size:12px;color:var(--gold);line-height:1.7}
+.setup-banner strong{display:block;font-size:13px;margin-bottom:4px}
+.setup-banner code{background:rgba(245,158,11,.15);padding:1px 5px;border-radius:4px;font-size:11px}
+.db-section-lbl{font-family:var(--font-h);font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:4px 0 12px}
+.db-kpi-row{display:grid;grid-template-columns:repeat(auto-fill,minmax(145px,1fr));gap:10px;margin-bottom:26px}
+.db-kpi{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px}
+.db-kpi-label{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:5px}
+.db-kpi-val{font-family:var(--font-h);font-size:20px;font-weight:800}
+.kv-blue{color:var(--blue)}.kv-green{color:var(--green)}.kv-orange{color:var(--orange)}.kv-gold{color:var(--gold)}.kv-purple{color:var(--purple)}
+.db-sec-hd{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px}
+.db-sec-title{font-family:var(--font-h);font-size:15px;font-weight:700}
+.db-tabs{display:flex;gap:5px;flex-wrap:wrap}
+.db-tab{font-size:11px;padding:5px 11px;border-radius:50px;background:var(--surface2);border:1px solid var(--border);color:var(--muted);cursor:pointer;font-family:var(--font-b);font-weight:500;transition:all .15s}.db-tab.active{background:var(--green);color:#000;border-color:var(--green);font-weight:700}
+.db-orders-list{display:flex;flex-direction:column;gap:8px}
+.db-order-row{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:13px 14px;transition:border-color .18s}.db-order-row:hover{border-color:var(--border2)}
+.db-or-top{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:10px}
+.db-or-id{font-size:10px;color:var(--muted);font-family:monospace;margin-bottom:2px}
+.db-or-name{font-weight:700;font-size:13px}
+.db-or-rest{font-size:11px;color:var(--green);margin-top:1px}
+.db-or-items{font-size:11px;color:var(--muted);margin-top:2px}
+.db-or-right{display:flex;flex-direction:column;align-items:flex-end;gap:5px;flex-shrink:0}
+.db-or-total{font-family:var(--font-h);font-size:15px;font-weight:800;color:var(--green)}
+.db-or-status{font-size:10px;font-weight:600;padding:2px 9px;border-radius:50px;white-space:nowrap}
+.db-or-cells{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding-top:8px;border-top:1px solid var(--border)}
+.db-cell{text-align:center}.db-cell-l{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.3px;margin-bottom:2px}.db-cell-v{font-size:12px;font-weight:600}
+.db-status-sel{background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font-b);font-size:11px;padding:4px 8px;border-radius:var(--radius-sm);cursor:pointer;outline:none;margin-top:4px}.db-status-sel:focus{border-color:var(--green)}
+.db-multi-rest{margin-top:8px;padding-top:8px;border-top:1px solid var(--border);font-size:10px;color:var(--muted);line-height:1.9}
+.db-empty{text-align:center;padding:44px 0;color:var(--muted);font-size:13px}
+
+/* ADMIN — per-restaurant table */
+.db-rest-table{display:flex;flex-direction:column;gap:8px;margin-bottom:24px}
+.db-rest-row{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:13px 14px;display:grid;grid-template-columns:36px 1fr repeat(4,auto);align-items:center;gap:12px;transition:border-color .18s}.db-rest-row:hover{border-color:var(--border2)}
+.db-re{font-size:24px;text-align:center}
+.db-rn{font-weight:700;font-size:13px}.db-rid{font-size:10px;color:var(--muted);font-family:monospace}
+.db-rs{text-align:right}.db-rs-l{font-size:9px;color:var(--muted);text-transform:uppercase;margin-bottom:2px}.db-rs-v{font-family:var(--font-h);font-size:13px;font-weight:700}
+
+/* RESTAURANT PORTAL — order action buttons */
+.rest-order-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:16px;margin-bottom:10px;transition:border-color .18s}
+.rest-order-card:hover{border-color:var(--border2)}
+.rest-oc-top{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:12px}
+.rest-oc-id{font-size:10px;color:var(--muted);font-family:monospace;margin-bottom:3px}
+.rest-oc-customer{font-weight:700;font-size:14px}
+.rest-oc-phone{font-size:12px;color:var(--muted)}
+.rest-oc-addr{font-size:11px;color:var(--muted);margin-top:2px}
+.rest-oc-right{display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0}
+.rest-oc-total{font-family:var(--font-h);font-size:16px;font-weight:800;color:var(--green)}
+.rest-oc-status{font-size:10px;font-weight:600;padding:3px 10px;border-radius:50px}
+.rest-oc-items{background:var(--surface2);border-radius:var(--radius-sm);padding:10px 12px;margin-bottom:12px}
+.rest-oc-item{display:flex;justify-content:space-between;font-size:12px;padding:2px 0}
+.rest-oc-item .in{color:var(--text)}.rest-oc-item .ip{color:var(--muted)}
+.rest-oc-actions{display:flex;gap:8px;flex-wrap:wrap}
+.rac{padding:8px 14px;border-radius:50px;font-family:var(--font-b);font-size:11px;font-weight:700;cursor:pointer;border:none;transition:all .18s}
+.rac.preparing{background:rgba(255,107,53,.15);color:var(--orange);border:1px solid rgba(255,107,53,.3)}.rac.preparing:hover{background:var(--orange);color:#fff}
+.rac.ready{background:rgba(245,158,11,.12);color:var(--gold);border:1px solid rgba(245,158,11,.3)}.rac.ready:hover{background:var(--gold);color:#000}
+.rac.delivered{background:var(--green-dim);color:var(--green);border:1px solid rgba(29,185,84,.3)}.rac.delivered:hover{background:var(--green);color:#000}
+.rac.disabled{opacity:.35;cursor:not-allowed;pointer-events:none}
+.rest-oc-meta{display:flex;gap:10px;font-size:10px;color:var(--muted);margin-top:8px;flex-wrap:wrap}
+.rest-new-badge{display:inline-block;background:var(--red);color:#fff;font-size:9px;font-weight:700;padding:1px 6px;border-radius:50px;margin-left:6px;animation:blink 1.2s infinite}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.4}}
+
+/* PIN MANAGEMENT (admin) */
+.pin-mgmt-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;margin-bottom:24px}
+.pin-mgmt-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:14px}
+.pin-mgmt-name{font-weight:700;font-size:13px;margin-bottom:2px}
+.pin-mgmt-rid{font-size:10px;color:var(--muted);font-family:monospace;margin-bottom:10px}
+.pin-row{display:flex;gap:8px;align-items:center}
+.pin-display{font-family:var(--font-h);font-size:18px;font-weight:800;color:var(--gold);letter-spacing:4px;flex:1}
+.pin-edit-input{flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:7px 10px;color:var(--text);font-family:var(--font-h);font-size:16px;font-weight:700;letter-spacing:4px;text-align:center;outline:none;display:none}
+.pin-edit-input:focus{border-color:var(--green)}
+.pin-btn{background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px 12px;border-radius:50px;font-size:11px;font-weight:600;cursor:pointer;transition:all .15s;font-family:var(--font-b)}.pin-btn:hover{border-color:var(--green);color:var(--green)}
+.pin-btn.save{background:var(--green);color:#000;border-color:var(--green);display:none}.pin-btn.save:hover{background:var(--green-dark)}
+
+/* TRACKER */
+.track-wrap{padding:24px 20px;max-width:480px;margin:0 auto}
+.track-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:24px}
+.track-title{font-family:var(--font-h);font-size:18px;font-weight:800;margin-bottom:4px}
+.track-sub{font-size:12px;color:var(--muted);margin-bottom:16px}
+.track-summary{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px;margin-bottom:20px;text-align:center}
+.ts-label{font-size:9px;color:var(--muted);text-transform:uppercase;margin-bottom:3px}.ts-val{font-size:12px;font-weight:700}
+.track-status-big{font-family:var(--font-h);font-size:22px;font-weight:800;color:var(--green);margin-bottom:20px;text-align:center}
+.track-steps{display:flex;flex-direction:column}
+.track-step{display:flex;align-items:flex-start;gap:14px;padding-bottom:20px;position:relative}.track-step:last-child{padding-bottom:0}
+.t-line{position:absolute;left:15px;top:32px;width:2px;height:calc(100% - 12px);background:var(--border)}.track-step:last-child .t-line{display:none}
+.t-dot{width:32px;height:32px;border-radius:50%;border:2px solid var(--border);background:var(--surface2);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:14px;transition:all .3s}
+.track-step.done .t-dot{background:var(--green);border-color:var(--green)}.track-step.done .t-line{background:var(--green)}
+.track-step.active .t-dot{background:var(--green-dim);border-color:var(--green);animation:pulse 1.5s infinite}
+.t-info{flex:1;padding-top:4px}.t-name{font-weight:600;font-size:13px}.t-desc{font-size:11px;color:var(--muted);margin-top:2px}
+.track-step.pending .t-name,.track-step.pending .t-dot{opacity:.4}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(29,185,84,.4)}50%{box-shadow:0 0 0 6px rgba(29,185,84,0)}}
+.track-refresh{width:100%;margin-top:20px;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:10px;border-radius:var(--radius-sm);font-family:var(--font-b);font-size:12px;cursor:pointer;transition:all .18s}.track-refresh:hover{border-color:var(--green);color:var(--green)}
+
+/* RESPONSIVE */
+@media(max-width:768px){.db-rest-row{grid-template-columns:36px 1fr 1fr 1fr;gap:8px}.db-or-cells{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:540px){
+  .hero{padding:44px 14px 32px}.sec,.ph,.ar-wrap,.db-wrap,.track-wrap{padding-left:14px;padding-right:14px}
+  .rgrid{grid-template-columns:1fr}.ar-benefits{grid-template-columns:1fr}
+  .pay-opts,.del-toggle{flex-direction:column}.zone-grid{grid-template-columns:1fr 1fr}
+  .menu-hero{flex-direction:column}.stats .stat{max-width:none}
+  .db-kpi-row{grid-template-columns:1fr 1fr}.db-rest-row{grid-template-columns:36px 1fr}
+  .db-or-cells{grid-template-columns:1fr 1fr}.track-summary{grid-template-columns:1fr 1fr}
+  nav .nbtn:not(.g):not(#db-nb):not(#login-btn):not(#logout-btn){display:none}
+  .pin-mgmt-grid{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="logo" onclick="goHome()">ZAF <span>KITCHEN</span></div>
+  <div class="nav-right">
+    <span id="db-status">⏳ Connecting…</span>
+    <span id="role-badge"></span>
+    <button id="db-nb" class="nbtn" onclick="showPage('page-dashboard')" style="display:none">📊 Admin</button>
+    <button id="rest-db-btn" class="nbtn" onclick="showPage('page-rest-dashboard')" style="display:none">📋 My Orders</button>
+    <button class="nbtn" onclick="showPage('page-add')" id="list-rest-btn">🏪 List Restaurant</button>
+    <button id="login-btn" class="nbtn" onclick="showPage('page-login')">🔐 Login</button>
+    <button id="logout-btn" class="nbtn red" onclick="doLogout()" style="display:none">🚪 Logout</button>
+    <button class="nbtn g" onclick="openCart()" id="cart-btn">🛒 <span id="cart-count">0</span></button>
+  </div>
+</nav>
+
+<!-- ═══ HOME ═══ -->
+<div class="page active" id="page-home">
+  <div class="hero">
+    <div class="badge">🇹🇿 Delivering across Dar es Salaam</div>
+    <h1>Kula vizuri,<br><em>Order smart.</em></h1>
+    <p>Fresh food from Dar's best local restaurants — ordered instantly, tracked in real-time.</p>
+    <div class="hbtns">
+      <button class="btn btn-g" onclick="showPage('page-browse')">🍽️ Browse Restaurants</button>
+      <button class="btn btn-o" onclick="showPage('page-add')">🏪 Add Your Restaurant</button>
+    </div>
+  </div>
+  <div class="stats">
+    <div class="stat"><div class="stat-n">10+</div><div class="stat-l">Restaurants</div></div>
+    <div class="stat"><div class="stat-n">Live</div><div class="stat-l">Tracking</div></div>
+    <div class="stat"><div class="stat-n">DSM</div><div class="stat-l">Coverage</div></div>
+    <div class="stat"><div class="stat-n">WA</div><div class="stat-l">Orders</div></div>
+  </div>
+  <div class="sec">
+    <div class="sec-hd"><div class="sec-t">⭐ Top Restaurants</div><button class="lbtn" onclick="showPage('page-browse')">See all →</button></div>
+    <div class="rgrid" id="home-grid"></div>
+  </div>
+  <div class="div"></div>
+  <div class="footer">
+    <div class="fl-links">
+      <button class="fl-link" onclick="showPage('page-browse')">Browse</button>
+      <button class="fl-link" onclick="showPage('page-add')">List Restaurant</button>
+      <button class="fl-link" onclick="showPage('page-login')">Restaurant Login</button>
+    </div>
+    <div class="fc">© 2025 ZAF KITCHEN · Dar es Salaam, Tanzania</div>
+  </div>
+</div>
+
+<!-- ═══ BROWSE ═══ -->
+<div class="page" id="page-browse">
+  <div class="ph">
+    <button class="back-btn" onclick="showPage('page-home')">← Home</button>
+    <div class="pt">All Restaurants</div>
+    <div class="ps">Discover the best places to eat in Dar es Salaam</div>
+    <div class="sw">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+      <input type="text" id="rsearch" placeholder="Search by name or cuisine…" oninput="filterR()"/>
+    </div>
+  </div>
+  <div class="sec" style="padding-top:0">
+    <div class="rgrid" id="browse-grid"></div>
+    <div class="no-res" id="no-res" style="display:none">🍽️ No restaurants match your search.</div>
+  </div>
+</div>
+
+<!-- ═══ MENU ═══ -->
+<div class="page" id="page-menu">
+  <div class="ph">
+    <button class="back-btn" onclick="goBack()">← Back</button>
+    <div id="menu-hero"></div>
+  </div>
+  <div class="sec" style="padding-top:0" id="menu-body"></div>
+</div>
+
+<!-- ═══ LOGIN ═══ -->
+<div class="page" id="page-login">
+  <div class="login-wrap">
+    <div class="login-card">
+      <div class="login-icon">🔐</div>
+      <div class="login-title">ZAF KITCHEN Login</div>
+      <div class="login-sub">Enter your PIN to access your dashboard.<br>Restaurant owners use their assigned PIN.<br>Admin uses the master PIN.</div>
+      <div class="pin-dots" id="pin-dots">
+        <div class="pin-dot" id="pd0"></div>
+        <div class="pin-dot" id="pd1"></div>
+        <div class="pin-dot" id="pd2"></div>
+        <div class="pin-dot" id="pd3"></div>
+      </div>
+      <div class="numpad">
+        <div class="nk" onclick="pinKey('1')">1</div>
+        <div class="nk" onclick="pinKey('2')">2</div>
+        <div class="nk" onclick="pinKey('3')">3</div>
+        <div class="nk" onclick="pinKey('4')">4</div>
+        <div class="nk" onclick="pinKey('5')">5</div>
+        <div class="nk" onclick="pinKey('6')">6</div>
+        <div class="nk" onclick="pinKey('7')">7</div>
+        <div class="nk" onclick="pinKey('8')">8</div>
+        <div class="nk" onclick="pinKey('9')">9</div>
+        <div class="nk del" onclick="pinKey('clear')">✕ Clear</div>
+        <div class="nk" onclick="pinKey('0')">0</div>
+        <div class="nk del" onclick="pinKey('back')">⌫</div>
+      </div>
+      <div class="login-err" id="login-err"></div>
+      <div class="login-hint">Admin PIN: <strong>0000</strong> &nbsp;|&nbsp; Restaurant PIN: your assigned number</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ ADMIN DASHBOARD ═══ -->
+<div class="page" id="page-dashboard">
+  <div class="ph">
+    <button class="back-btn" onclick="showPage('page-home')">← Home</button>
+    <div class="pt">👑 Admin Dashboard</div>
+    <div class="ps">All restaurants · real-time orders, revenue &amp; commission</div>
+  </div>
+  <div class="db-wrap">
+    <div class="db-section-lbl">📅 Today's Overview</div>
+    <div class="db-kpi-row">
+      <div class="db-kpi"><div class="db-kpi-label">Orders Today</div><div class="db-kpi-val kv-blue" id="kpi-orders">—</div></div>
+      <div class="db-kpi"><div class="db-kpi-label">Food Revenue</div><div class="db-kpi-val kv-green" id="kpi-revenue">—</div></div>
+      <div class="db-kpi"><div class="db-kpi-label">Delivery Collected</div><div class="db-kpi-val kv-orange" id="kpi-delivery">—</div></div>
+      <div class="db-kpi"><div class="db-kpi-label">Platform Commission</div><div class="db-kpi-val kv-gold" id="kpi-commission">—</div></div>
+      <div class="db-kpi"><div class="db-kpi-label">Pending</div><div class="db-kpi-val kv-orange" id="kpi-pending">—</div></div>
+      <div class="db-kpi"><div class="db-kpi-label">Delivered</div><div class="db-kpi-val kv-green" id="kpi-completed">—</div></div>
+    </div>
+
+    <div class="db-section-lbl">🏪 Per-Restaurant Breakdown (All Time)</div>
+    <div class="db-rest-table" id="db-rest-table"><div class="db-empty">No orders yet.</div></div>
+
+    <div class="db-section-lbl" style="margin-top:24px">🔑 Restaurant PIN Management</div>
+    <div class="pin-mgmt-grid" id="pin-mgmt-grid"></div>
+
+    <div class="db-sec-hd">
+      <div class="db-sec-title">🧾 All Orders</div>
+      <div class="db-tabs">
+        <div class="db-tab active" onclick="adminFilterOrders('all',this)">All</div>
+        <div class="db-tab" onclick="adminFilterOrders('Order Received',this)">Received</div>
+        <div class="db-tab" onclick="adminFilterOrders('Preparing',this)">Preparing</div>
+        <div class="db-tab" onclick="adminFilterOrders('Ready',this)">Ready</div>
+        <div class="db-tab" onclick="adminFilterOrders('Delivered',this)">Delivered</div>
+      </div>
+    </div>
+    <div style="margin-bottom:12px">
+      <select class="fi" style="max-width:260px;font-size:12px" id="rest-filter-sel" onchange="applyAdminFilters()">
+        <option value="all">All Restaurants</option>
+      </select>
+    </div>
+    <div class="db-orders-list" id="db-orders-list"><div class="db-empty">No orders yet.</div></div>
+  </div>
+</div>
+
+<!-- ═══ RESTAURANT PORTAL ═══ -->
+<div class="page" id="page-rest-dashboard">
+  <div class="ph">
+    <button class="back-btn" onclick="showPage('page-home')">← Home</button>
+    <div class="pt" id="rest-portal-title">🏪 My Orders</div>
+    <div class="ps" id="rest-portal-sub">Your live orders — update status as you prepare</div>
+  </div>
+  <div class="db-wrap">
+    <div class="db-kpi-row">
+      <div class="db-kpi"><div class="db-kpi-label">Orders Today</div><div class="db-kpi-val kv-blue" id="r-kpi-orders">—</div></div>
+      <div class="db-kpi"><div class="db-kpi-label">Food Revenue</div><div class="db-kpi-val kv-green" id="r-kpi-revenue">—</div></div>
+      <div class="db-kpi"><div class="db-kpi-label">Commission Owed</div><div class="db-kpi-val kv-gold" id="r-kpi-commission">—</div></div>
+      <div class="db-kpi"><div class="db-kpi-label">Your Payout</div><div class="db-kpi-val kv-orange" id="r-kpi-payout">—</div></div>
+      <div class="db-kpi"><div class="db-kpi-label">Pending</div><div class="db-kpi-val kv-orange" id="r-kpi-pending">—</div></div>
+      <div class="db-kpi"><div class="db-kpi-label">Delivered</div><div class="db-kpi-val kv-green" id="r-kpi-delivered">—</div></div>
+    </div>
+    <div class="db-sec-hd">
+      <div class="db-sec-title">📦 Live Orders</div>
+      <div class="db-tabs">
+        <div class="db-tab active" onclick="restFilterOrders('all',this)">All</div>
+        <div class="db-tab" onclick="restFilterOrders('Order Received',this)">New 🔴</div>
+        <div class="db-tab" onclick="restFilterOrders('Preparing',this)">Preparing</div>
+        <div class="db-tab" onclick="restFilterOrders('Ready',this)">Ready</div>
+        <div class="db-tab" onclick="restFilterOrders('Delivered',this)">Delivered</div>
+      </div>
+    </div>
+    <div id="rest-orders-list"><div class="db-empty">No orders yet. They will appear here automatically when placed.</div></div>
+  </div>
+</div>
+
+<!-- ═══ TRACKER ═══ -->
+<div class="page" id="page-tracker">
+  <div class="ph"><button class="back-btn" onclick="showPage('page-home')">← Home</button></div>
+  <div class="track-wrap">
+    <div class="track-card">
+      <div class="track-title">🛵 Order Tracker</div>
+      <div class="track-sub" id="track-order-id">Order ID: —</div>
+      <div class="track-summary" id="track-summary"></div>
+      <div class="track-status-big" id="track-status-lbl">Order Received</div>
+      <div class="track-steps">
+        <div class="track-step active" id="track-step-0"><div class="t-line"></div><div class="t-dot">📋</div><div class="t-info"><div class="t-name">Order Received</div><div class="t-desc">Restaurant has received your order</div></div></div>
+        <div class="track-step pending" id="track-step-1"><div class="t-line"></div><div class="t-dot">👨‍🍳</div><div class="t-info"><div class="t-name">Preparing</div><div class="t-desc">Your food is being prepared</div></div></div>
+        <div class="track-step pending" id="track-step-2"><div class="t-line"></div><div class="t-dot">✅</div><div class="t-info"><div class="t-name">Ready</div><div class="t-desc">Order ready for pickup / delivery</div></div></div>
+        <div class="track-step pending" id="track-step-3"><div class="t-dot">🎉</div><div class="t-info"><div class="t-name">Delivered</div><div class="t-desc">Enjoy your meal!</div></div></div>
+      </div>
+      <button class="track-refresh" onclick="manualRefreshTracker()">🔄 Refresh Status</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ ADD RESTAURANT ═══ -->
+<div class="page" id="page-add">
+  <div class="ph"><button class="back-btn" onclick="showPage('page-home')">← Home</button></div>
+  <div class="ar-wrap">
+    <div class="ar-card">
+      <div id="ar-form">
+        <div class="ar-hdr"><div class="ar-icon">🏪</div><div class="ar-title">List Your Restaurant</div><div class="ar-sub">Join ZAF KITCHEN and reach thousands of customers across Dar es Salaam.</div></div>
+        <div class="ar-benefits">
+          <div class="ben"><div class="ben-ic">📱</div><div class="ben-t">WhatsApp Orders</div><div class="ben-d">Orders direct to your number</div></div>
+          <div class="ben"><div class="ben-ic">🚀</div><div class="ben-t">Fast Setup</div><div class="ben-d">Live within 24 hours</div></div>
+          <div class="ben"><div class="ben-ic">💰</div><div class="ben-t">Low Commission</div><div class="ben-d">Only 5% per order</div></div>
+          <div class="ben"><div class="ben-ic">📊</div><div class="ben-t">Your Portal</div><div class="ben-d">Manage orders yourself</div></div>
+        </div>
+        <div class="fg"><label class="fl">Restaurant Name *</label><input type="text" class="fi" id="rn" placeholder="e.g. Mama Pima Kitchen"/></div>
+        <div class="fg"><label class="fl">Owner / Contact Name *</label><input type="text" class="fi" id="ro" placeholder="Your full name"/></div>
+        <div class="fg"><label class="fl">WhatsApp Number *</label><input type="tel" class="fi" id="rp" placeholder="+255 7XX XXX XXX"/></div>
+        <div class="fg"><label class="fl">Location / Area *</label><input type="text" class="fi" id="rl" placeholder="e.g. Kinondoni, Sinza, Kariakoo…"/></div>
+        <div class="fg"><label class="fl">Type of Food</label><input type="text" class="fi" id="rf" placeholder="e.g. Local Cuisine, Grills, Pizza…"/></div>
+        <button class="sub-btn" onclick="submitRequest()">Submit Request →</button>
+      </div>
+      <div id="ar-success" style="display:none">
+        <div class="suc"><div class="suc-ic">🎉</div><div class="suc-t">Request Received!</div>
+          <div class="suc-s">Thank you for joining ZAF KITCHEN!<br><br>We will contact you via WhatsApp within 24 hours to complete your setup and assign your login PIN.<br><br><strong style="color:var(--text)">Expected: within 24 hours.</strong></div>
+          <button class="btn btn-g" style="margin-top:22px" onclick="resetForm()">← Back to Home</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ CART ═══ -->
+<div class="cart-ov" id="cart-ov" onclick="closeCart()"></div>
+<div class="cart-p" id="cart-p">
+  <div class="cart-hd"><div class="cart-hd-t">🛒 Your Cart</div><button class="ic-btn" onclick="closeCart()">✕</button></div>
+  <div class="cart-list" id="cart-list"></div>
+  <div class="cart-ft" id="cart-ft" style="display:none">
+    <div class="fr"><span>Food Subtotal</span><span class="fv" id="cf-sub">TSh 0</span></div>
+    <div class="fr del-r"><span>Delivery Fee</span><span class="fv" id="cf-del">—</span></div>
+    <div class="fr plat"><span>Platform fee (5% of food)</span><span class="fv" id="cf-fee">TSh 0</span></div>
+    <div class="tr"><span>Total</span><span id="cf-tot">TSh 0</span></div>
+    <button class="co-btn" onclick="openCheckout()">Proceed to Checkout</button>
+    <button class="cl-btn" onclick="clearCart()">Clear Cart</button>
+  </div>
+</div>
+
+<!-- ═══ CHECKOUT MODAL ═══ -->
+<div class="mbg" id="co-modal">
+  <div class="modal">
+    <button class="m-close" onclick="closeCheckout()">✕</button>
+    <div id="co-s1">
+      <div class="m-title">📋 Complete Your Order</div>
+      <div class="os" id="co-summary"></div>
+      <div class="fg">
+        <label class="fl">Delivery Type *</label>
+        <div class="del-toggle">
+          <div class="dt-opt sel" id="dt-pickup" onclick="selDelivery('pickup')">🏃 Self Pickup</div>
+          <div class="dt-opt" id="dt-delivery" onclick="selDelivery('delivery')">🚚 Delivery</div>
+        </div>
+      </div>
+      <div id="zone-section" class="fg">
+        <label class="fl">Delivery Zone * <span style="color:var(--orange);font-size:10px">(customer pays)</span></label>
+        <div class="zone-grid">
+          <div class="zone-card" id="zone-0" onclick="selZone(0)"><div class="zi">🏠</div><div class="zn">Zone 1</div><div class="zd">0–2 km</div><div class="zf">TSh 2,000</div></div>
+          <div class="zone-card" id="zone-1" onclick="selZone(1)"><div class="zi">🏘️</div><div class="zn">Zone 2</div><div class="zd">2–5 km</div><div class="zf">TSh 4,000</div></div>
+          <div class="zone-card" id="zone-2" onclick="selZone(2)"><div class="zi">🌆</div><div class="zn">Zone 3</div><div class="zd">5–10 km</div><div class="zf">TSh 7,000</div></div>
+        </div>
+        <div style="font-size:10px;color:var(--muted);margin-top:5px">Commission calculated on food total only. GPS pricing coming soon.</div>
+      </div>
+      <div class="fg"><label class="fl">Full Name *</label><input type="text" class="fi" id="cn" placeholder="Your name"/></div>
+      <div class="fg"><label class="fl">Phone Number *</label><input type="tel" class="fi" id="cp" placeholder="+255 7XX XXX XXX"/></div>
+      <div class="fg"><label class="fl">Address / Delivery Notes *</label><input type="text" class="fi" id="cl" placeholder="e.g. Kariakoo, near Total station"/></div>
+      <div class="fg">
+        <label class="fl">Payment Method *</label>
+        <div class="pay-opts">
+          <div class="po sel" id="po-cod" onclick="selPay('cod')"><div class="po-ic">💵</div><div class="po-lb">Cash on Delivery</div><div class="po-sub">Pay when it arrives</div></div>
+          <div class="po" id="po-online" onclick="selPay('online')"><div class="po-ic">📲</div><div class="po-lb">Online Payment</div><div class="po-sub">M-Pesa / Tigo Pesa</div></div>
+        </div>
+      </div>
+      <button class="btn btn-g" style="width:100%;justify-content:center;border-radius:9px;padding:12px;font-size:14px" onclick="processOrder()">Place Order →</button>
+    </div>
+    <div id="co-s2" style="display:none"><div class="pay-st" id="pay-block"></div></div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+// ═══════════════════════════════════════════════════════
+// CONFIG
+// ═══════════════════════════════════════════════════════
+const PLATFORM_FEE_RATE=0.05;
+const DELIVERY_ZONES=[{label:'Zone 1',range:'0–2 km',fee:2000},{label:'Zone 2',range:'2–5 km',fee:4000},{label:'Zone 3',range:'5–10 km',fee:7000}];
+const STATUS_FLOW=['Order Received','Preparing','Ready','Delivered'];
+const STATUS_COLORS={'Order Received':'var(--blue)','Preparing':'var(--orange)','Ready':'var(--gold)','Delivered':'var(--green)','Cancelled':'var(--red)'};
+const ADMIN_PIN='0000';
+
+// ═══════════════════════════════════════════════════════
+// SESSION — who is logged in
+// ═══════════════════════════════════════════════════════
+let _session=JSON.parse(sessionStorage.getItem('zk_session')||'null');
+// {role:'admin'|'restaurant', rid:null|'rest_001', name:'...'}
+
+function saveSession(s){_session=s;sessionStorage.setItem('zk_session',JSON.stringify(s));}
+function clearSession(){_session=null;sessionStorage.removeItem('zk_session');}
+
+// ═══════════════════════════════════════════════════════
+// RESTAURANT DATA
+// ═══════════════════════════════════════════════════════
+const restaurants=[
+  {rid:'rest_001',id:1,name:'Awery Kitchen',emoji:'🍗',badge:'🔥 Popular',cuisine:'Local Tanzanian',rating:'4.8',time:'25–35 min',commissionRate:0.05,whatsapp:'255700000001',description:'Authentic Tanzanian home-style cooking. Famous for grilled chicken, ugali, and rich coconut bean stew.',menu:[{category:'🍽️ Main Dishes',items:[{name:'Grilled Chicken (Half)',desc:'Marinated in local spices, served with kachumbari',price:18000,emoji:'🍗'},{name:'Ugali & Mchuzi wa Nyama',desc:'Classic ugali with slow-cooked beef stew',price:12000,emoji:'🫕'},{name:'Coconut Bean Stew',desc:'Rich maharagwe ya nazi with steamed rice',price:9000,emoji:'🥘'},{name:'Wali wa Nazi',desc:'Fragrant coconut rice',price:7000,emoji:'🍚'}]},{category:'🥗 Sides',items:[{name:'Kachumbari',desc:'Fresh tomato, onion & coriander salad',price:3000,emoji:'🥗'},{name:'Chips Mwitu',desc:'Street-style fries with chilli sauce',price:5000,emoji:'🍟'}]},{category:'🥤 Drinks',items:[{name:'Fresh Mango Juice',desc:'Blended, no sugar added',price:4000,emoji:'🥭'},{name:'Tangawizi Tea',desc:'Hot ginger tea, lightly sweetened',price:2500,emoji:'🫖'},{name:'Soda',desc:'Coke/Fanta/Sprite 300ml',price:2000,emoji:'🥤'}]}]},
+  {rid:'rest_002',id:2,name:'Zanzibar Grill House',emoji:'🍔',badge:'⚡ Fast Delivery',cuisine:'Grills & Burgers',rating:'4.6',time:'20–30 min',commissionRate:0.05,whatsapp:'255700000002',description:'Sizzling grills and juicy burgers inspired by the Spice Island.',menu:[{category:'🍔 Burgers',items:[{name:'Zanzibari Spice Burger',desc:'Beef patty, island spice & mango chutney',price:16000,emoji:'🍔'},{name:'Chicken Fillet Burger',desc:'Crispy chicken, lettuce, tomato, garlic mayo',price:14000,emoji:'🍔'},{name:'Double Smash Burger',desc:'Two smashed beef patties, cheese, pickles',price:22000,emoji:'🍔'}]},{category:'🔥 Grills',items:[{name:'Mixed Grill Platter',desc:'Chicken, beef & lamb skewers with chips',price:35000,emoji:'🍢'},{name:'BBQ Ribs (Half Rack)',desc:'Slow-smoked with tamarind BBQ sauce',price:28000,emoji:'🥩'},{name:'Grilled Chicken Wings (8)',desc:'Marinated, chargrilled, served with dip',price:18000,emoji:'🍗'}]},{category:'🍟 Sides & Drinks',items:[{name:'Crispy Chips',desc:'Seasoned with paprika salt',price:5000,emoji:'🍟'},{name:'Coleslaw',desc:'Creamy homemade slaw',price:3500,emoji:'🥗'},{name:'Soda / Water',desc:'Chilled 500ml bottle',price:2500,emoji:'🥤'}]}]},
+  {rid:'rest_003',id:3,name:'Kilimanjaro Kitchen',emoji:'🍕',badge:'🌿 Healthy Options',cuisine:'Pizza & Salads',rating:'4.7',time:'30–45 min',commissionRate:0.05,whatsapp:'255700000003',description:'Wood-fired pizzas and fresh salads made with locally sourced ingredients.',menu:[{category:'🍕 Pizzas',items:[{name:'Margherita Classic',desc:'Tomato sauce, mozzarella, fresh basil',price:20000,emoji:'🍕'},{name:'Spicy Beef Pizza',desc:'Minced beef, jalapeños, red onion, cheddar',price:24000,emoji:'🍕'},{name:'Tropical Chicken',desc:'Chicken, pineapple, capsicum, BBQ drizzle',price:22000,emoji:'🍕'},{name:'Veggie Delight',desc:'Zucchini, olives, bell peppers, mushrooms',price:18000,emoji:'🍕'}]},{category:'🥗 Salads',items:[{name:'Caesar Salad',desc:'Romaine, croutons, parmesan, caesar dressing',price:12000,emoji:'🥗'},{name:'Avocado Garden Salad',desc:'Mixed greens, avocado, cherry tomato',price:13000,emoji:'🥑'},{name:'Greek Salad',desc:'Feta, cucumber, olives, tomato, oregano',price:11000,emoji:'🥗'}]},{category:'🥤 Drinks',items:[{name:'Fresh Passion Juice',desc:'Squeezed daily',price:5000,emoji:'🍹'},{name:'Sparkling Water',desc:'330ml bottle',price:3000,emoji:'💧'},{name:'Iced Tea (Lemon)',desc:'Homemade, lightly sweetened',price:4500,emoji:'🧊'}]}]},
+  {rid:'rest_004',id:4,name:'Kariakoo Nyama Choma',emoji:'🔥',badge:'🥩 Best Roast',cuisine:'Nyama Choma & BBQ',rating:'4.9',time:'35–50 min',commissionRate:0.05,whatsapp:'255700000004',description:'The legendary nyama choma from the heart of Kariakoo.',menu:[{category:'🥩 Nyama Choma',items:[{name:'Mbuzi Choma (500g)',desc:'Roasted goat, tender & juicy',price:25000,emoji:'🥩'},{name:"Ng'ombe Choma (500g)",desc:'Tender roasted beef over charcoal',price:22000,emoji:'🥩'},{name:'Kuku Choma (Half)',desc:'Half grilled chicken with peri-peri sauce',price:16000,emoji:'🍗'},{name:'Samaki wa Kukaanga (500g)',desc:'Deep fried whole fish',price:18000,emoji:'🐟'}]},{category:'🍚 Sides',items:[{name:'Ugali (Large)',desc:'Serves 2 people',price:5000,emoji:'🍚'},{name:'Wali wa Kawaida',desc:'Plain steamed rice',price:4000,emoji:'🍚'},{name:'Kachumbari',desc:'Fresh tomato & onion salad',price:3000,emoji:'🥗'},{name:'Chips Mwitu',desc:'Street-style fries with chilli',price:5000,emoji:'🍟'}]},{category:'🥤 Drinks',items:[{name:'Cold Soda',desc:'Coke, Fanta, or Sprite 300ml',price:2000,emoji:'🥤'},{name:'Mineral Water',desc:'500ml chilled bottle',price:1500,emoji:'💧'}]}]},
+  {rid:'rest_005',id:5,name:'Msasani Sushi & Asian',emoji:'🍣',badge:'🌏 Asian Fusion',cuisine:'Japanese & Pan-Asian',rating:'4.5',time:'40–55 min',commissionRate:0.05,whatsapp:'255700000005',description:'Fresh sushi rolls and pan-Asian dishes by a Japanese-trained chef in Dar.',menu:[{category:'🍣 Sushi Rolls',items:[{name:'Tuna Crunch Roll (8 pcs)',desc:'Tuna, cucumber, spicy mayo, tempura flakes',price:28000,emoji:'🍣'},{name:'Salmon Avocado Roll (8 pcs)',desc:'Fresh salmon, avocado, sesame seeds',price:26000,emoji:'🍣'},{name:'Spicy Prawn Roll (8 pcs)',desc:'Tiger prawns, chilli mayo, cucumber',price:30000,emoji:'🍤'},{name:'Vegetable Roll (8 pcs)',desc:'Cucumber, avocado, carrot, pickled radish',price:18000,emoji:'🥬'}]},{category:'🍜 Hot Dishes',items:[{name:'Chicken Teriyaki Bowl',desc:'Glazed chicken over steamed rice',price:22000,emoji:'🍱'},{name:'Pad Thai (Chicken)',desc:'Classic Thai noodles, peanuts, lime',price:20000,emoji:'🍜'},{name:'Beef Ramen',desc:'Rich tonkotsu broth, tender beef, soft boiled egg',price:24000,emoji:'🍜'},{name:'Miso Soup',desc:'Tofu, wakame, spring onion',price:8000,emoji:'🥣'}]}]},
+  {rid:'rest_006',id:6,name:'Dar Bakery & Cafe',emoji:'☕',badge:'☀️ Breakfast',cuisine:'Café & Pastries',rating:'4.4',time:'15–25 min',commissionRate:0.05,whatsapp:'255700000006',description:'Your morning go-to. Freshly baked mandazi, croissants, strong Tanzanian coffee.',menu:[{category:'🍳 Breakfast',items:[{name:'Full Breakfast Plate',desc:'Eggs, sausage, beans, toast, grilled tomato',price:18000,emoji:'🍳'},{name:'Avocado Toast',desc:'Whole grain bread, avocado, poached egg',price:12000,emoji:'🥑'},{name:'Mandazi (6 pcs)',desc:'Freshly fried, lightly spiced with coconut',price:4000,emoji:'🥮'},{name:'Croissant & Butter',desc:'Flaky, golden, baked fresh every morning',price:8000,emoji:'🥐'}]},{category:'☕ Coffee & Tea',items:[{name:'Tanzanian Espresso',desc:'Single origin Kilimanjaro beans, double shot',price:5000,emoji:'☕'},{name:'Iced Latte',desc:'Double shot over ice, oat or dairy milk',price:8000,emoji:'🧋'},{name:'Chai Maziwa',desc:'Spiced East African milk tea',price:3500,emoji:'🫖'},{name:'Fresh OJ',desc:'Squeezed orange juice, 350ml',price:6000,emoji:'🍊'}]}]},
+  {rid:'rest_007',id:7,name:'Ocean View Seafood',emoji:'🦞',badge:'🌊 Fresh Catch',cuisine:'Seafood',rating:'4.8',time:'35–50 min',commissionRate:0.05,whatsapp:'255700000007',description:'Daily fresh catch from the Indian Ocean. Lobster, prawns, octopus and whole grilled fish.',menu:[{category:'🦞 Seafood Specials',items:[{name:'Grilled Lobster (Medium)',desc:'Garlic butter, lemon, chips & salad',price:65000,emoji:'🦞'},{name:'Coconut Prawn Curry',desc:'Tiger prawns in rich coconut sauce, basmati',price:35000,emoji:'🍤'},{name:'Grilled Octopus',desc:'Marinated in lemon & herbs, chargrilled',price:30000,emoji:'🐙'},{name:'Fried Calamari',desc:'Crispy rings, tartare sauce, lemon wedge',price:20000,emoji:'🦑'}]},{category:'🐟 Fish Dishes',items:[{name:'Whole Grilled Tilapia',desc:'Herb-stuffed, kachumbari & ugali',price:22000,emoji:'🐟'},{name:'Coconut Fish Curry',desc:'Snapper fillet in mild coconut sauce',price:26000,emoji:'🥘'},{name:'Grilled Tuna Steak',desc:'Sesame-crusted, with vegetables',price:32000,emoji:'🥩'}]}]},
+  {rid:'rest_008',id:8,name:'Mama Africa Kitchen',emoji:'🌍',badge:'🌺 Pan-African',cuisine:'Pan-African Cuisine',rating:'4.7',time:'30–45 min',commissionRate:0.05,whatsapp:'255700000008',description:'A celebration of African flavours — from Ethiopian injera to West African jollof.',menu:[{category:'🌍 East Africa',items:[{name:'Pilau ya Nyama',desc:'Spiced rice with tender beef, Kenyan style',price:15000,emoji:'🍛'},{name:'Biriyani ya Kuku',desc:'Aromatic chicken biriyani, Zanzibari recipe',price:17000,emoji:'🍛'},{name:'Matoke & Groundnut Stew',desc:'Steamed green banana with rich peanut sauce',price:12000,emoji:'🫕'}]},{category:'🌎 West & North Africa',items:[{name:'Jollof Rice & Chicken',desc:'Nigerian-style smoky jollof with grilled chicken',price:18000,emoji:'🍚'},{name:'Ethiopian Injera Platter',desc:'Injera bread with lentils, beef tibs & veggies',price:22000,emoji:'🫓'}]},{category:'🍬 Desserts',items:[{name:'Kashata ya Nazi',desc:'Coconut peanut brittle candy',price:3500,emoji:'🍬'},{name:'Vitumbua (4 pcs)',desc:'Sweet coconut rice pancakes',price:5000,emoji:'🥞'}]}]},
+  {rid:'rest_009',id:9,name:'Azul Restaurant',emoji:'🫐',badge:'🌍 French & Moroccan',cuisine:'French · Moroccan · International',rating:'4.4',time:'25–40 min',commissionRate:0.05,address:'Shekilango Rd, Sinza Mapambano, Dar es Salaam',hours:'Open 7:00 AM – 12:00 AM daily',whatsapp:'255767390307',description:'French and Moroccan-inspired cuisine on Shekilango Rd.',menu:[{category:'🥗 Starters',items:[{name:'Moroccan Harira Soup',desc:'Spiced tomato & lentil soup',price:9000,emoji:'🥣'},{name:'Bruschetta al Pomodoro',desc:'Toasted bread, fresh tomatoes, basil & olive oil',price:8000,emoji:'🍞'},{name:'Hummus & Pita',desc:'Creamy chickpea hummus with warm pita',price:10000,emoji:'🫔'}]},{category:'🍽️ Main Dishes',items:[{name:'Moroccan Chicken Tagine',desc:'Slow-braised chicken with olives & lemon',price:26000,emoji:'🫕'},{name:'Grilled Lamb Chops',desc:'Harissa-marinated, couscous & roasted veg',price:38000,emoji:'🥩'},{name:'French Steak Frites',desc:'Sirloin steak, herb butter, crispy fries',price:35000,emoji:'🥩'},{name:'Pasta Carbonara',desc:'Creamy egg sauce, pancetta, parmesan',price:22000,emoji:'🍝'},{name:'Vegetable Couscous',desc:'Steamed couscous, seven seasonal vegetables',price:18000,emoji:'🫕'}]},{category:'🍮 Desserts',items:[{name:'Crème Brûlée',desc:'French vanilla custard with caramelised sugar',price:12000,emoji:'🍮'},{name:'Baklava',desc:'Flaky pastry, pistachios & honey syrup',price:8000,emoji:'🧁'}]},{category:'☕ Drinks',items:[{name:'Moroccan Mint Tea',desc:'Fresh mint, green tea, traditional glass',price:5000,emoji:'🫖'},{name:'Fresh Orange Juice',desc:'Squeezed to order',price:6000,emoji:'🍊'},{name:'Café au Lait',desc:'Strong coffee with steamed milk',price:5500,emoji:'☕'}]}]},
+  {rid:'rest_010',id:10,name:'Bachelor Restaurant',emoji:'🍽️',badge:'🏡 Local Favourite',cuisine:'Local Tanzanian Cuisine',rating:'4.5',time:'20–35 min',commissionRate:0.05,address:'Makumbusho, Dar es Salaam',hours:'Open 10:00 AM – 10:00 PM daily',whatsapp:'255798444901',description:'A beloved neighbourhood spot in Makumbusho serving hearty, home-style Tanzanian food.',menu:[{category:'🍚 Rice & Stew',items:[{name:'Wali na Mchuzi wa Kuku',desc:'Steamed rice with rich chicken stew',price:12000,emoji:'🍛'},{name:'Wali na Samaki wa Kukaanga',desc:'Rice with deep-fried whole fish',price:14000,emoji:'🍛'},{name:"Wali na Nyama ya Ng'ombe",desc:'Rice with slow-cooked beef stew',price:13000,emoji:'🍛'},{name:'Pilau ya Kuku',desc:'Aromatic spiced pilau with chicken',price:15000,emoji:'🍛'}]},{category:'🫕 Ugali Dishes',items:[{name:'Ugali na Mchicha',desc:'Ugali with sautéed spinach in coconut',price:8000,emoji:'🥬'},{name:'Ugali na Nyama Choma',desc:'Ugali with roasted beef or goat',price:16000,emoji:'🥩'},{name:'Ugali na Samaki wa Nazi',desc:'Ugali with coconut fish curry',price:15000,emoji:'🐟'}]},{category:'🍟 Snacks & Sides',items:[{name:'Chips Mayai',desc:'Tanzanian omelette with chips inside',price:7000,emoji:'🍟'},{name:'Mishkaki (5 pcs)',desc:'Grilled beef skewers, marinated in spices',price:8000,emoji:'🍢'},{name:'Kachumbari',desc:'Fresh tomato, onion & coriander salad',price:2500,emoji:'🥗'}]},{category:'🥤 Drinks',items:[{name:'Uji wa Wimbi',desc:'Warm finger millet porridge',price:3000,emoji:'🥣'},{name:'Tamarind Juice',desc:'Tangy and refreshing, cold',price:3500,emoji:'🍹'},{name:'Soda',desc:'Coke/Fanta/Sprite 300ml',price:2000,emoji:'🥤'}]}]}
+];
+const restaurantMap={};restaurants.forEach(r=>{restaurantMap[r.rid]=r;});
+
+// ═══════════════════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════════════════
+let cart=[],_curPage='page-home',_prevPage='page-home',payMethod='cod',deliveryType='pickup',selectedZone=-1;
+let _pinBuffer='';
+let _adminStatusFilter='all',_restStatusFilter='all';
+window._curPage=_curPage;window._allOrders=[];
+
+// ═══════════════════════════════════════════════════════
+// NAVIGATION
+// ═══════════════════════════════════════════════════════
+function showPage(id){
+  // Guard dashboard pages — must be logged in
+  if(id==='page-dashboard'&&(!_session||_session.role!=='admin')){showPage('page-login');return;}
+  if(id==='page-rest-dashboard'&&(!_session||_session.role!=='restaurant')){showPage('page-login');return;}
+
+  _prevPage=_curPage;
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  _curPage=id;window._curPage=id;
+  window.scrollTo({top:0,behavior:'smooth'});
+
+  if(id==='page-browse'){document.getElementById('rsearch').value='';renderGrid('browse-grid',restaurants);document.getElementById('no-res').style.display='none';}
+  if(id==='page-dashboard')loadAdminDashboard();
+  if(id==='page-rest-dashboard')loadRestDashboard();
+}
+function goBack(){showPage(_prevPage==='page-browse'?'page-browse':'page-home');}
+function goHome(){showPage('page-home');}
+
+// ═══════════════════════════════════════════════════════
+// NAV UI — update based on session
+// ═══════════════════════════════════════════════════════
+function updateNavUI(){
+  const adminBtn=document.getElementById('db-nb');
+  const restBtn=document.getElementById('rest-db-btn');
+  const loginBtn=document.getElementById('login-btn');
+  const logoutBtn=document.getElementById('logout-btn');
+  const badge=document.getElementById('role-badge');
+  const listBtn=document.getElementById('list-rest-btn');
+
+  if(!_session){
+    adminBtn.style.display='none';restBtn.style.display='none';
+    loginBtn.style.display='flex';logoutBtn.style.display='none';
+    badge.style.display='none';listBtn.style.display='flex';
+  } else if(_session.role==='admin'){
+    adminBtn.style.display='flex';restBtn.style.display='none';
+    loginBtn.style.display='none';logoutBtn.style.display='flex';
+    badge.textContent='👑 Admin';badge.className='admin';badge.style.display='block';
+    listBtn.style.display='none';
+  } else {
+    adminBtn.style.display='none';restBtn.style.display='flex';
+    loginBtn.style.display='none';logoutBtn.style.display='flex';
+    const rMeta=restaurantMap[_session.rid];
+    badge.textContent=`${rMeta?rMeta.emoji:''} ${_session.name}`;
+    badge.className='restaurant';badge.style.display='block';
+    listBtn.style.display='none';
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+// LOGIN — PIN PAD
+// ═══════════════════════════════════════════════════════
+function pinKey(k){
+  if(k==='clear'){_pinBuffer='';updatePinDots();document.getElementById('login-err').textContent='';return;}
+  if(k==='back'){_pinBuffer=_pinBuffer.slice(0,-1);updatePinDots();return;}
+  if(_pinBuffer.length>=4)return;
+  _pinBuffer+=k;
+  updatePinDots();
+  if(_pinBuffer.length===4)setTimeout(submitPin,150);
+}
+function updatePinDots(){
+  for(let i=0;i<4;i++){
+    const d=document.getElementById('pd'+i);
+    if(d)d.classList.toggle('filled',i<_pinBuffer.length);
+  }
+}
+async function submitPin(){
+  const pin=_pinBuffer;
+  _pinBuffer='';updatePinDots();
+  const errEl=document.getElementById('login-err');
+  errEl.textContent='Checking…';
+
+  let result=null;
+  if(window.verifyPin){
+    result=await window.verifyPin(pin);
+  } else {
+    // Fallback local check
+    if(pin===ADMIN_PIN)result={role:'admin',rid:null,name:'Admin'};
+    else{
+      const localPins={'1001':'rest_001','1002':'rest_002','1003':'rest_003','1004':'rest_004','1005':'rest_005','1006':'rest_006','1007':'rest_007','1008':'rest_008','1009':'rest_009','1010':'rest_010'};
+      if(localPins[pin]){const r=restaurantMap[localPins[pin]];result={role:'restaurant',rid:localPins[pin],name:r?r.name:'Restaurant'};}
+    }
+  }
+
+  if(result){
+    saveSession(result);
+    updateNavUI();
+    errEl.textContent='';
+    showToast(`✅ Welcome, ${result.name}!`,'ok');
+    if(result.role==='admin')showPage('page-dashboard');
+    else showPage('page-rest-dashboard');
+  } else {
+    errEl.textContent='❌ Wrong PIN. Please try again.';
+    const input=document.querySelector('.numpad');
+    if(input){input.style.animation='none';setTimeout(()=>{},10);}
+    // Shake all numpad
+    document.querySelectorAll('.pin-dot').forEach(d=>{d.style.borderColor='var(--red)';setTimeout(()=>{d.style.borderColor='';},800);});
+  }
+}
+
+function doLogout(){
+  clearSession();updateNavUI();
+  showToast('Logged out','ok');
+  showPage('page-home');
+}
+
+// ═══════════════════════════════════════════════════════
+// RESTAURANT CARDS
+// ═══════════════════════════════════════════════════════
+function makeCard(r){
+  const d=document.createElement('div');d.className='rcard';
+  d.innerHTML=`<div class="rc-img"><span>${r.emoji}</span><div class="rc-badge">${r.badge}</div></div>
+    <div class="rc-body">
+      <div class="rc-name">${r.name}</div><div class="rc-cuisine">${r.cuisine}</div>
+      <div class="rc-meta"><span>⭐ ${r.rating}</span><span>🕐 ${r.time}</span>${r.address?`<span>📍 ${r.address.split(',')[0]}</span>`:''}</div>
+      <div class="rc-desc">${r.description}</div>
+      <div class="rc-rid">ID: ${r.rid} · ${(r.commissionRate*100).toFixed(0)}% commission</div>
+      <button class="vmbtn" onclick="openMenu('${r.rid}')">View Menu →</button>
+    </div>`;
+  return d;
+}
+function renderGrid(gid,list){const g=document.getElementById(gid);g.innerHTML='';list.forEach(r=>g.appendChild(makeCard(r)));}
+function filterR(){
+  const q=document.getElementById('rsearch').value.toLowerCase().trim();
+  const f=q?restaurants.filter(r=>r.name.toLowerCase().includes(q)||r.cuisine.toLowerCase().includes(q)):restaurants;
+  document.getElementById('no-res').style.display=f.length?'none':'block';
+  renderGrid('browse-grid',f);
+}
+
+// ═══════════════════════════════════════════════════════
+// MENU
+// ═══════════════════════════════════════════════════════
+function slugify(s){return s.replace(/[^a-z0-9]/gi,'-').toLowerCase();}
+function esc(s){return(s||'').replace(/'/g,"\\'");}
+
+function openMenu(rid){
+  const r=restaurantMap[rid];if(!r)return;
+  document.getElementById('menu-hero').innerHTML=`<div class="menu-hero">
+    <div class="mh-icon">${r.emoji}</div>
+    <div><div class="mh-name">${r.name}</div>
+      <div class="mh-meta">${r.cuisine} · ⭐ ${r.rating} · 🕐 ${r.time}</div>
+      ${r.address?`<div class="mh-addr">📍 ${r.address}</div>`:''}
+      ${r.hours?`<div class="mh-hours">🕐 ${r.hours}</div>`:''}
+      <div style="font-size:11px;color:var(--gold);margin-top:4px">ID: ${r.rid} · ${(r.commissionRate*100).toFixed(0)}% commission</div>
+    </div></div>`;
+  const body=document.getElementById('menu-body');body.innerHTML='';
+  r.menu.forEach(cat=>{
+    const sec=document.createElement('div');
+    sec.innerHTML=`<div class="mc-title">${cat.category}</div>`;
+    const list=document.createElement('div');list.className='mi-list';
+    cat.items.forEach(item=>{
+      const inCart=cart.find(c=>c.rid===r.rid&&c.name===item.name);
+      const el=document.createElement('div');el.className='mi';el.id=`mi-${r.rid}-${slugify(item.name)}`;
+      el.innerHTML=`<div class="mi-img">${item.emoji||r.emoji}</div>
+        <div class="mi-info"><div class="mi-name">${item.name}</div><div class="mi-desc">${item.desc}</div></div>
+        <div class="mi-right">
+          <div class="mi-price">TSh ${item.price.toLocaleString()}</div>
+          <div class="mi-qty" id="mq-${r.rid}-${slugify(item.name)}" style="${inCart?'':'display:none'}">× ${inCart?inCart.qty:0}</div>
+          <button class="add-btn" onclick="addToCart('${r.rid}','${esc(item.name)}',${item.price},'${esc(r.name)}','${r.whatsapp}','${item.emoji||r.emoji}',${r.commissionRate})">+</button>
+        </div>`;
+      list.appendChild(el);
+    });
+    sec.appendChild(list);body.appendChild(sec);
+  });
+  showPage('page-menu');
+}
+function updateMenuQty(rid,name,qty){const el=document.getElementById(`mq-${rid}-${slugify(name)}`);if(!el)return;el.style.display=qty>0?'':'none';el.textContent=`× ${qty}`;}
+
+// ═══════════════════════════════════════════════════════
+// CART
+// ═══════════════════════════════════════════════════════
+function addToCart(rid,name,price,rname,whatsapp,emoji,commissionRate){
+  const ex=cart.find(c=>c.rid===rid&&c.name===name);
+  if(ex){ex.qty++;updateMenuQty(rid,name,ex.qty);}
+  else{cart.push({rid,name,price,rname,whatsapp,emoji,commissionRate,qty:1});updateMenuQty(rid,name,1);}
+  updateCartUI();showToast(`✅ ${name} added`,'ok');
+}
+function changeQty(i,d){cart[i].qty+=d;updateMenuQty(cart[i].rid,cart[i].name,cart[i].qty);if(cart[i].qty<=0)cart.splice(i,1);updateCartUI();}
+function clearCart(){cart=[];updateCartUI();closeCart();}
+function getZoneFee(){return(deliveryType==='delivery'&&selectedZone>=0)?DELIVERY_ZONES[selectedZone].fee:0;}
+
+function updateCartUI(){
+  const count=cart.reduce((s,c)=>s+c.qty,0);
+  document.getElementById('cart-count').textContent=count;
+  const list=document.getElementById('cart-list'),ft=document.getElementById('cart-ft');
+  if(!cart.length){list.innerHTML=`<div class="ce"><div class="ce-ic">🛒</div>Your cart is empty</div>`;ft.style.display='none';return;}
+  ft.style.display='block';list.innerHTML='';
+  let sub=0;
+  cart.forEach((c,i)=>{
+    sub+=c.price*c.qty;
+    const el=document.createElement('div');el.className='ci';
+    el.innerHTML=`<div style="font-size:22px;flex-shrink:0">${c.emoji}</div>
+      <div class="ci-info"><div class="ci-name">${c.qty>1?c.qty+'× ':''}${c.name}</div><div class="ci-from">${c.rname}</div></div>
+      <div class="ci-right">
+        <div class="ci-price">TSh ${(c.price*c.qty).toLocaleString()}</div>
+        <div class="qc"><button class="qb" onclick="changeQty(${i},-1)">−</button><span class="qn">${c.qty}</span><button class="qb" onclick="changeQty(${i},1)">+</button></div>
+      </div>`;
+    list.appendChild(el);
+  });
+  const pf=Math.round(sub*PLATFORM_FEE_RATE),df=getZoneFee();
+  document.getElementById('cf-sub').textContent=`TSh ${sub.toLocaleString()}`;
+  document.getElementById('cf-fee').textContent=`TSh ${pf.toLocaleString()}`;
+  const delEl=document.getElementById('cf-del');
+  delEl.textContent=df>0?`TSh ${df.toLocaleString()}`:(deliveryType==='delivery'?'Select zone':'N/A (Pickup)');
+  delEl.style.color=df>0?'var(--orange)':'var(--muted)';
+  document.getElementById('cf-tot').textContent=`TSh ${(sub+pf+df).toLocaleString()}`;
+}
+function openCart(){document.getElementById('cart-ov').classList.add('open');document.getElementById('cart-p').classList.add('open');}
+function closeCart(){document.getElementById('cart-ov').classList.remove('open');document.getElementById('cart-p').classList.remove('open');}
+
+// ═══════════════════════════════════════════════════════
+// CHECKOUT
+// ═══════════════════════════════════════════════════════
+function selPay(m){payMethod=m;document.getElementById('po-cod').classList.toggle('sel',m==='cod');document.getElementById('po-online').classList.toggle('sel',m==='online');}
+function selDelivery(type){
+  deliveryType=type;
+  document.getElementById('dt-pickup').classList.toggle('sel',type==='pickup');
+  document.getElementById('dt-delivery').classList.toggle('sel',type==='delivery');
+  document.getElementById('zone-section').style.display=type==='delivery'?'block':'none';
+  if(type==='pickup')selectedZone=-1;
+  buildSummaryHTML();updateCartUI();
+}
+function selZone(i){
+  selectedZone=i;
+  document.querySelectorAll('.zone-card').forEach((z,idx)=>z.classList.toggle('sel',idx===i));
+  buildSummaryHTML();updateCartUI();
+}
+
+function calcTotals(){
+  const sub=cart.reduce((s,c)=>s+c.price*c.qty,0);
+  const platFee=Math.round(sub*PLATFORM_FEE_RATE);
+  const delFee=getZoneFee();
+  const total=sub+platFee+delFee;
+  const byRest={};
+  cart.forEach(c=>{
+    if(!byRest[c.rid])byRest[c.rid]={rid:c.rid,rname:c.rname,whatsapp:c.whatsapp,commissionRate:c.commissionRate,sub:0,items:[]};
+    byRest[c.rid].sub+=c.price*c.qty;
+    byRest[c.rid].items.push({name:c.name,qty:c.qty,price:c.price});
+  });
+  Object.values(byRest).forEach(r=>{r.commission=Math.round(r.sub*r.commissionRate);r.payout=r.sub-r.commission;});
+  return{sub,platFee,delFee,total,byRest};
+}
+
+function buildSummaryHTML(){
+  const{sub,platFee,delFee,total}=calcTotals();
+  const el=document.getElementById('co-summary');if(!el)return;
+  const zLabel=deliveryType==='delivery'&&selectedZone>=0?`${DELIVERY_ZONES[selectedZone].label} (${DELIVERY_ZONES[selectedZone].range})`:(deliveryType==='pickup'?'Self Pickup':'Select zone ⚠️');
+  let h=`<div class="os-t">Order Summary</div>`;
+  cart.forEach(c=>h+=`<div class="os-item"><span class="n">${c.qty>1?c.qty+'× ':''}${c.name} <span style="color:var(--muted);font-size:9px">(${c.rname})</span></span><span class="p">TSh ${(c.price*c.qty).toLocaleString()}</span></div>`);
+  h+=`<hr class="os-div">
+    <div class="os-row"><span>Food Subtotal</span><span class="v">TSh ${sub.toLocaleString()}</span></div>
+    <div class="os-row del"><span>Delivery — ${zLabel}</span><span class="v">${delFee>0?`TSh ${delFee.toLocaleString()}`:(deliveryType==='pickup'?'N/A':'—')}</span></div>
+    <div class="os-row plat"><span>Platform fee (5% of food)</span><span class="v">TSh ${platFee.toLocaleString()}</span></div>
+    <div class="os-total"><span>Total</span><span>TSh ${total.toLocaleString()}</span></div>`;
+  el.innerHTML=h;
+}
+
+function openCheckout(){
+  if(!cart.length)return;
+  closeCart();
+  document.getElementById('co-s1').style.display='block';
+  document.getElementById('co-s2').style.display='none';
+  selPay('cod');selDelivery('pickup');selectedZone=-1;
+  document.querySelectorAll('.zone-card').forEach(z=>z.classList.remove('sel'));
+  buildSummaryHTML();
+  document.getElementById('co-modal').classList.add('open');
+}
+function closeCheckout(){document.getElementById('co-modal').classList.remove('open');}
+
+async function processOrder(){
+  const name=document.getElementById('cn').value.trim();
+  const phone=document.getElementById('cp').value.trim();
+  const loc=document.getElementById('cl').value.trim();
+  let ok=true;
+  [['cn',name],['cp',phone],['cl',loc]].forEach(([id,v])=>{document.getElementById(id).classList.toggle('err',!v);if(!v)ok=false;});
+  if(!ok){showToast('⚠️ Please fill in all fields','err');return;}
+  if(deliveryType==='delivery'&&selectedZone<0){showToast('⚠️ Please select a delivery zone','err');return;}
+  const{total}=calcTotals();
+  if(payMethod==='online'){
+    document.getElementById('co-s1').style.display='none';
+    document.getElementById('co-s2').style.display='block';
+    document.getElementById('pay-block').innerHTML=`<div class="spinner"></div><div class="pst-title">Processing Payment…</div><div class="pst-sub">Please wait a moment</div>`;
+    setTimeout(async()=>{
+      document.getElementById('pay-block').innerHTML=`
+        <div class="pst-icon">✅</div>
+        <div class="pst-title" style="color:var(--green)">Payment Confirmed!</div>
+        <div class="pst-sub">TSh ${total.toLocaleString()} confirmed.</div>
+        <button class="btn btn-g" style="margin-top:16px" onclick="finalizeOrder('${esc(name)}','${esc(phone)}','${esc(loc)}')">📲 Send via WhatsApp</button>`;
+    },2000);
+  } else {
+    await finalizeOrder(name,phone,loc);
+  }
+}
+
+async function finalizeOrder(name,phone,loc){
+  const{sub,platFee,delFee,total,byRest}=calcTotals();
+  const zoneInfo=selectedZone>=0?DELIVERY_ZONES[selectedZone]:null;
+
+  // STEP 1: Open WhatsApp FIRST before any await — browser blocks popups after async gaps
+  doWhatsApp(name,phone,loc,byRest,delFee,zoneInfo);
+
+  // STEP 2: Close modal and clear cart immediately
+  closeCheckout();
+  cart=[];updateCartUI();
+  showToast('🎉 Order sent via WhatsApp!','ok');
+
+  // STEP 3: Save to Firebase in background
+  const orderDoc={
+    customerName:name,customerPhone:phone,deliveryAddress:loc,
+    paymentMethod:payMethod,deliveryType:deliveryType,
+    deliveryZone:zoneInfo?zoneInfo.label:'Pickup',
+    deliveryFee:delFee,subtotal:sub,platformFee:platFee,total:total,
+    commission_amount:platFee,status:'Order Received',
+    restaurantOrders:Object.values(byRest).map(r=>({
+      rid:r.rid,restaurantName:r.rname,items:r.items,
+      foodSubtotal:r.sub,commissionRate:r.commissionRate,
+      commissionOwed:r.commission,payout:r.payout
+    })),
+    restaurantIds:Object.keys(byRest),
+    restaurantNames:Object.values(byRest).map(r=>r.rname)
+  };
+  try{
+    const orderId=await window.saveOrder(orderDoc);
+    window._trackingOrderId=orderId;
+    if(orderId){
+      document.getElementById('track-order-id').textContent='Order #'+orderId.slice(-8).toUpperCase();
+      document.getElementById('track-summary').innerHTML=
+        '<div><div class="ts-label">Food Total</div><div class="ts-val">TSh '+sub.toLocaleString()+'</div></div>'+
+        '<div><div class="ts-label">Delivery</div><div class="ts-val" style="color:var(--orange)">'+(delFee>0?'TSh '+delFee.toLocaleString():'Pickup')+'</div></div>'+
+        '<div><div class="ts-label">Grand Total</div><div class="ts-val" style="color:var(--green)">TSh '+total.toLocaleString()+'</div></div>';
+      refreshTracker(orderId);
+      showPage('page-tracker');
+    }
+  }catch(e){console.error(e);showToast('⚠️ Order sent but not saved — check Firebase','err');}
+}
+
+function doWhatsApp(name,phone,loc,byRest,delFee,zoneInfo){
+  const payLbl=payMethod==='online'?'📲 Online (Confirmed ✅)':'💵 Cash on Delivery';
+  const delLbl=zoneInfo?`🚚 ${zoneInfo.label} (${zoneInfo.range}) — TSh ${zoneInfo.fee.toLocaleString()} (paid by customer)`:'🏃 Self Pickup';
+  Object.values(byRest).forEach(r=>{
+    let msg=`🍽️ *New ZAF KITCHEN Order*\n\n`;
+    msg+=`🏪 *Restaurant:* ${r.rname} (${r.rid})\n`;
+    msg+=`👤 *Customer:* ${name}\n📞 *Phone:* ${phone}\n📍 *Address:* ${loc}\n`;
+    msg+=`💳 *Payment:* ${payLbl}\n🚗 *Delivery:* ${delLbl}\n\n*── Items ──*\n`;
+    r.items.forEach(i=>msg+=`• ${i.qty>1?i.qty+'× ':''}${i.name} — TSh ${(i.price*i.qty).toLocaleString()}\n`);
+    msg+=`\n*Food Subtotal:* TSh ${r.sub.toLocaleString()}`;
+    if(delFee>0)msg+=`\n*Delivery Fee:* TSh ${delFee.toLocaleString()} (from customer)`;
+    msg+=`\n*Commission (${(r.commissionRate*100).toFixed(0)}%):* TSh ${r.commission.toLocaleString()}`;
+    msg+=`\n*Your Payout:* TSh ${r.payout.toLocaleString()}`;
+    msg+=`\n\n_ZAF KITCHEN · Dar es Salaam_`;
+    window.open(`https://wa.me/${r.whatsapp}?text=${encodeURIComponent(msg)}`,'_blank');
+  });
+}
+
+// ═══════════════════════════════════════════════════════
+// TRACKER
+// ═══════════════════════════════════════════════════════
+window.refreshTracker=function(orderId){
+  const orders=window._allOrders.length?window._allOrders:JSON.parse(localStorage.getItem('zk_orders')||'[]');
+  const order=orders.find(o=>o.id===orderId);if(!order)return;
+  const cur=STATUS_FLOW.indexOf(order.status);
+  STATUS_FLOW.forEach((s,i)=>{
+    const el=document.getElementById(`track-step-${i}`);if(!el)return;
+    el.classList.remove('done','active','pending');
+    el.classList.add(i<cur?'done':i===cur?'active':'pending');
+  });
+  const lbl=document.getElementById('track-status-lbl');
+  if(lbl)lbl.textContent=order.status||'Order Received';
+};
+function manualRefreshTracker(){
+  if(!window._trackingOrderId){showToast('No active order','err');return;}
+  refreshTracker(window._trackingOrderId);showToast('✅ Status refreshed','ok');
+}
+
+// ═══════════════════════════════════════════════════════
+// ADMIN DASHBOARD
+// ═══════════════════════════════════════════════════════
+window.loadAdminDashboard=function(){
+  const orders=window._allOrders.length?window._allOrders:JSON.parse(localStorage.getItem('zk_orders')||'[]');
+  const today=new Date().toDateString();
+  const todayOrders=orders.filter(o=>{
+    const ts=o.timestamp?.toDate?o.timestamp.toDate():new Date(o.timestamp||Date.now());
+    return ts.toDateString()===today;
+  });
+  const completed=todayOrders.filter(o=>o.status==='Delivered');
+  const pending=todayOrders.filter(o=>!['Delivered','Cancelled'].includes(o.status));
+  const set=(id,v)=>{const el=document.getElementById(id);if(el)el.textContent=v;};
+  set('kpi-orders',todayOrders.length);
+  set('kpi-revenue','TSh '+completed.reduce((s,o)=>s+(o.subtotal||0),0).toLocaleString());
+  set('kpi-delivery','TSh '+todayOrders.reduce((s,o)=>s+(o.deliveryFee||0),0).toLocaleString());
+  set('kpi-commission','TSh '+completed.reduce((s,o)=>s+(o.commission_amount||0),0).toLocaleString());
+  set('kpi-pending',pending.length);set('kpi-completed',completed.length);
+
+  // Per-restaurant breakdown
+  const restStats={};
+  orders.forEach(o=>{
+    (o.restaurantOrders||[]).forEach(ro=>{
+      if(!restStats[ro.rid])restStats[ro.rid]={rid:ro.rid,name:ro.restaurantName,emoji:restaurantMap[ro.rid]?.emoji||'🏪',totalOrders:0,foodRevenue:0,commissionOwed:0,payout:0};
+      restStats[ro.rid].totalOrders++;
+      if(o.status==='Delivered'){
+        restStats[ro.rid].foodRevenue+=(ro.foodSubtotal||0);
+        restStats[ro.rid].commissionOwed+=(ro.commissionOwed||0);
+        restStats[ro.rid].payout+=(ro.payout||0);
+      }
+    });
+  });
+  const rows=Object.values(restStats).sort((a,b)=>b.foodRevenue-a.foodRevenue);
+  const restTable=document.getElementById('db-rest-table');
+  const restSel=document.getElementById('rest-filter-sel');
+  if(restTable){
+    if(!rows.length){restTable.innerHTML='<div class="db-empty">No restaurant data yet.</div>';}
+    else{
+      restTable.innerHTML='';
+      if(restSel){restSel.innerHTML='<option value="all">All Restaurants</option>';rows.forEach(r=>{const o=document.createElement('option');o.value=r.rid;o.textContent=`${r.emoji} ${r.name}`;restSel.appendChild(o);});}
+      rows.forEach(r=>{
+        const el=document.createElement('div');el.className='db-rest-row';
+        el.innerHTML=`<div class="db-re">${r.emoji}</div>
+          <div><div class="db-rn">${r.name}</div><div class="db-rid">${r.rid}</div></div>
+          <div class="db-rs"><div class="db-rs-l">Orders</div><div class="db-rs-v kv-blue">${r.totalOrders}</div></div>
+          <div class="db-rs"><div class="db-rs-l">Revenue</div><div class="db-rs-v kv-green">TSh ${r.foodRevenue.toLocaleString()}</div></div>
+          <div class="db-rs"><div class="db-rs-l">Commission</div><div class="db-rs-v kv-gold">TSh ${r.commissionOwed.toLocaleString()}</div></div>
+          <div class="db-rs"><div class="db-rs-l">Payout</div><div class="db-rs-v kv-orange">TSh ${r.payout.toLocaleString()}</div></div>`;
+        restTable.appendChild(el);
+      });
+    }
+  }
+
+  // PIN management cards
+  renderPinManagement();
+  applyAdminFilters();
+};
+
+function renderPinManagement(){
+  const grid=document.getElementById('pin-mgmt-grid');if(!grid)return;
+  grid.innerHTML='';
+  restaurants.forEach(r=>{
+    const card=document.createElement('div');card.className='pin-mgmt-card';
+    card.innerHTML=`<div class="pin-mgmt-name">${r.emoji} ${r.name}</div>
+      <div class="pin-mgmt-rid">${r.rid}</div>
+      <div class="pin-row">
+        <div class="pin-display" id="pin-display-${r.rid}">••••</div>
+        <input class="pin-edit-input" id="pin-input-${r.rid}" maxlength="4" type="text" inputmode="numeric" pattern="[0-9]*" placeholder="New PIN"/>
+        <button class="pin-btn" onclick="togglePinEdit('${r.rid}')">✏️ Edit</button>
+        <button class="pin-btn save" id="pin-save-${r.rid}" onclick="savePinEdit('${r.rid}')">✅ Save</button>
+      </div>`;
+    grid.appendChild(card);
+  });
+}
+
+function togglePinEdit(rid){
+  const disp=document.getElementById(`pin-display-${rid}`);
+  const inp=document.getElementById(`pin-input-${rid}`);
+  const saveBtn=document.getElementById(`pin-save-${rid}`);
+  const editBtn=inp.previousElementSibling;
+  const isEditing=inp.style.display==='block';
+  if(isEditing){
+    disp.style.display='block';inp.style.display='none';saveBtn.style.display='none';editBtn.textContent='✏️ Edit';
+  } else {
+    disp.style.display='none';inp.style.display='block';inp.value='';inp.focus();
+    saveBtn.style.display='block';editBtn.textContent='✕ Cancel';
+  }
+}
+
+async function savePinEdit(rid){
+  const inp=document.getElementById(`pin-input-${rid}`);
+  const newPin=inp.value.trim();
+  if(newPin.length!==4||!/^\d{4}$/.test(newPin)){showToast('PIN must be 4 digits','err');return;}
+  if(newPin===ADMIN_PIN){showToast('Cannot use admin PIN','err');return;}
+  if(window.updateRestPin){
+    const ok=await window.updateRestPin(rid,newPin);
+    if(ok){showToast(`✅ PIN updated for ${restaurantMap[rid]?.name}`,'ok');togglePinEdit(rid);}
+    else showToast('Failed to update PIN','err');
+  } else {
+    showToast('⚠️ Firebase not connected','err');
+  }
+}
+
+function applyAdminFilters(){
+  const status=_adminStatusFilter;
+  const restSel=document.getElementById('rest-filter-sel');
+  const restFilter=restSel?restSel.value:'all';
+  const orders=window._allOrders.length?window._allOrders:JSON.parse(localStorage.getItem('zk_orders')||'[]');
+  let filtered=[...orders];
+  if(status!=='all')filtered=filtered.filter(o=>o.status===status);
+  if(restFilter!=='all')filtered=filtered.filter(o=>(o.restaurantIds||[]).includes(restFilter));
+  renderAdminOrdersList(filtered.slice(0,60));
+}
+
+function adminFilterOrders(status,el){
+  _adminStatusFilter=status;
+  document.querySelectorAll('.db-tab').forEach(t=>t.classList.remove('active'));
+  if(el)el.classList.add('active');
+  applyAdminFilters();
+}
+
+function renderAdminOrdersList(orders){
+  const list=document.getElementById('db-orders-list');if(!list)return;
+  if(!orders.length){list.innerHTML='<div class="db-empty">No orders found.</div>';return;}
+  list.innerHTML='';
+  orders.forEach(o=>{
+    const ts=o.timestamp?.toDate?o.timestamp.toDate():new Date(o.timestamp||Date.now());
+    const timeStr=ts.toLocaleTimeString('en-TZ',{hour:'2-digit',minute:'2-digit'});
+    const dateStr=ts.toLocaleDateString('en-TZ',{day:'numeric',month:'short'});
+    const sc=STATUS_COLORS[o.status]||'var(--muted)';
+    const totalComm=(o.restaurantOrders||[]).reduce((s,r)=>s+(r.commissionOwed||0),0);
+    const allItems=(o.restaurantOrders||[]).flatMap(r=>r.items).map(i=>`${i.qty}×${i.name}`).join(', ');
+    const multiRest=(o.restaurantOrders||[]).length>1;
+    const el=document.createElement('div');el.className='db-order-row';
+    el.innerHTML=`<div class="db-or-top">
+        <div>
+          <div class="db-or-id">#${(o.id||'').slice(-8).toUpperCase()} · ${dateStr} ${timeStr}</div>
+          <div class="db-or-name">${o.customerName||'—'} <span style="font-size:10px;color:var(--muted)">${o.customerPhone||''}</span></div>
+          <div class="db-or-rest">${(o.restaurantNames||[]).join(' + ')}</div>
+          <div class="db-or-items">${allItems.slice(0,70)}${allItems.length>70?'…':''}</div>
+        </div>
+        <div class="db-or-right">
+          <div class="db-or-total">TSh ${(o.total||0).toLocaleString()}</div>
+          <div class="db-or-status" style="background:${sc}22;color:${sc}">${o.status||'Order Received'}</div>
+          <select class="db-status-sel" onchange="window.updateOrderStatus('${o.id}',this.value)">
+            ${STATUS_FLOW.map(s=>`<option value="${s}"${o.status===s?' selected':''}>${s}</option>`).join('')}
+            <option value="Cancelled"${o.status==='Cancelled'?' selected':''}>Cancelled</option>
+          </select>
+        </div>
+      </div>
+      <div class="db-or-cells">
+        <div class="db-cell"><div class="db-cell-l">Food Total</div><div class="db-cell-v" style="color:var(--green)">TSh ${(o.subtotal||0).toLocaleString()}</div></div>
+        <div class="db-cell"><div class="db-cell-l">Delivery Fee</div><div class="db-cell-v" style="color:var(--orange)">${o.deliveryFee>0?'TSh '+(o.deliveryFee||0).toLocaleString():'Pickup'}</div></div>
+        <div class="db-cell"><div class="db-cell-l">Commission</div><div class="db-cell-v" style="color:var(--gold)">TSh ${totalComm.toLocaleString()}</div></div>
+        <div class="db-cell"><div class="db-cell-l">Payment</div><div class="db-cell-v">${o.paymentMethod==='cod'?'💵 COD':'📲 Online'}</div></div>
+      </div>
+      ${multiRest?`<div class="db-multi-rest">${(o.restaurantOrders||[]).map(r=>`<span style="margin-right:14px">🏪 ${r.restaurantName}: TSh ${(r.foodSubtotal||0).toLocaleString()} food · TSh ${(r.commissionOwed||0).toLocaleString()} commission · TSh ${(r.payout||0).toLocaleString()} payout</span>`).join('')}</div>`:''}`;
+    list.appendChild(el);
+  });
+}
+
+// ═══════════════════════════════════════════════════════
+// RESTAURANT PORTAL DASHBOARD
+// ═══════════════════════════════════════════════════════
+window.loadRestDashboard=function(){
+  if(!_session||_session.role!=='restaurant')return;
+  const rid=_session.rid;
+  const rMeta=restaurantMap[rid];
+  const titleEl=document.getElementById('rest-portal-title');
+  const subEl=document.getElementById('rest-portal-sub');
+  if(titleEl)titleEl.textContent=`${rMeta?rMeta.emoji:''} ${_session.name}`;
+  if(subEl)subEl.textContent=`Your live orders — update status as you prepare`;
+
+  const orders=window._allOrders.length?window._allOrders:JSON.parse(localStorage.getItem('zk_orders')||'[]');
+  // Only orders that include this restaurant
+  const myOrders=orders.filter(o=>(o.restaurantIds||[]).includes(rid));
+  const today=new Date().toDateString();
+  const todayMy=myOrders.filter(o=>{
+    const ts=o.timestamp?.toDate?o.timestamp.toDate():new Date(o.timestamp||Date.now());
+    return ts.toDateString()===today;
+  });
+  const delivered=todayMy.filter(o=>o.status==='Delivered');
+  const pending=todayMy.filter(o=>!['Delivered','Cancelled'].includes(o.status));
+
+  // Calc per-restaurant totals for today delivered
+  let rev=0,comm=0,payout=0;
+  delivered.forEach(o=>{
+    const ro=(o.restaurantOrders||[]).find(r=>r.rid===rid);
+    if(ro){rev+=ro.foodSubtotal||0;comm+=ro.commissionOwed||0;payout+=ro.payout||0;}
+  });
+
+  const set=(id,v)=>{const el=document.getElementById(id);if(el)el.textContent=v;};
+  set('r-kpi-orders',todayMy.length);
+  set('r-kpi-revenue','TSh '+rev.toLocaleString());
+  set('r-kpi-commission','TSh '+comm.toLocaleString());
+  set('r-kpi-payout','TSh '+payout.toLocaleString());
+  set('r-kpi-pending',pending.length);
+  set('r-kpi-delivered',delivered.length);
+
+  renderRestOrders(myOrders);
+};
+
+function restFilterOrders(status,el){
+  _restStatusFilter=status;
+  document.querySelectorAll('#page-rest-dashboard .db-tab').forEach(t=>t.classList.remove('active'));
+  if(el)el.classList.add('active');
+  if(!_session)return;
+  const rid=_session.rid;
+  const orders=window._allOrders.length?window._allOrders:JSON.parse(localStorage.getItem('zk_orders')||'[]');
+  let myOrders=orders.filter(o=>(o.restaurantIds||[]).includes(rid));
+  if(status!=='all')myOrders=myOrders.filter(o=>o.status===status);
+  renderRestOrders(myOrders);
+}
+
+function renderRestOrders(orders){
+  const list=document.getElementById('rest-orders-list');if(!list)return;
+  if(!orders.length){list.innerHTML='<div class="db-empty">No orders here yet. New orders appear automatically.</div>';return;}
+  list.innerHTML='';
+  const rid=_session?.rid;
+
+  orders.slice(0,50).forEach(o=>{
+    const ts=o.timestamp?.toDate?o.timestamp.toDate():new Date(o.timestamp||Date.now());
+    const timeStr=ts.toLocaleTimeString('en-TZ',{hour:'2-digit',minute:'2-digit'});
+    const dateStr=ts.toLocaleDateString('en-TZ',{day:'numeric',month:'short'});
+    const sc=STATUS_COLORS[o.status]||'var(--muted)';
+    const isNew=o.status==='Order Received';
+
+    // My items only
+    const ro=(o.restaurantOrders||[]).find(r=>r.rid===rid)||{items:[],foodSubtotal:0,commissionOwed:0,payout:0};
+
+    const card=document.createElement('div');card.className='rest-order-card';
+    card.innerHTML=`<div class="rest-oc-top">
+        <div>
+          <div class="rest-oc-id">#${(o.id||'').slice(-8).toUpperCase()} · ${dateStr} ${timeStr}</div>
+          <div class="rest-oc-customer">${o.customerName||'—'}${isNew?`<span class="rest-new-badge">NEW</span>`:''}</div>
+          <div class="rest-oc-phone">📞 ${o.customerPhone||'—'}</div>
+          <div class="rest-oc-addr">📍 ${o.deliveryAddress||'—'} · ${o.deliveryType==='delivery'?`🚚 ${o.deliveryZone||''}`:' 🏃 Pickup'}</div>
+        </div>
+        <div class="rest-oc-right">
+          <div class="rest-oc-total">TSh ${(ro.foodSubtotal||0).toLocaleString()}</div>
+          <div class="rest-oc-status" style="background:${sc}22;color:${sc}">${o.status}</div>
+          <div style="font-size:10px;color:var(--muted);margin-top:4px">${o.paymentMethod==='cod'?'💵 COD':'📲 Online'}</div>
+        </div>
+      </div>
+      <div class="rest-oc-items">
+        ${ro.items.map(i=>`<div class="rest-oc-item"><span class="in">${i.qty>1?i.qty+'× ':''}${i.name}</span><span class="ip">TSh ${(i.price*i.qty).toLocaleString()}</span></div>`).join('')}
+      </div>
+      <div class="rest-oc-actions">
+        <button class="rac preparing ${['Preparing','Ready','Delivered'].includes(o.status)?'disabled':''}" onclick="window.updateOrderStatus('${o.id}','Preparing')">👨‍🍳 Preparing</button>
+        <button class="rac ready ${['Ready','Delivered'].includes(o.status)?'disabled':''}" onclick="window.updateOrderStatus('${o.id}','Ready')">✅ Ready</button>
+        <button class="rac delivered ${o.status==='Delivered'?'disabled':''}" onclick="window.updateOrderStatus('${o.id}','Delivered')">🎉 Delivered</button>
+      </div>
+      <div class="rest-oc-meta">
+        <span>Commission: TSh ${(ro.commissionOwed||0).toLocaleString()}</span>
+        <span>Your payout: <strong style="color:var(--green)">TSh ${(ro.payout||0).toLocaleString()}</strong></span>
+      </div>`;
+    list.appendChild(card);
+  });
+}
+
+// ═══════════════════════════════════════════════════════
+// ADD RESTAURANT FORM
+// ═══════════════════════════════════════════════════════
+function submitRequest(){
+  const n=document.getElementById('rn').value.trim();
+  const o2=document.getElementById('ro').value.trim();
+  const p=document.getElementById('rp').value.trim();
+  const l=document.getElementById('rl').value.trim();
+  let ok=true;
+  [['rn',n],['ro',o2],['rp',p],['rl',l]].forEach(([id,v])=>{document.getElementById(id).classList.toggle('err',!v);if(!v)ok=false;});
+  if(!ok){showToast('⚠️ Please fill in all required fields','err');return;}
+  document.getElementById('ar-form').style.display='none';
+  document.getElementById('ar-success').style.display='block';
+}
+function resetForm(){
+  ['rn','ro','rp','rl','rf'].forEach(id=>{document.getElementById(id).value='';document.getElementById(id).classList.remove('err');});
+  document.getElementById('ar-form').style.display='block';
+  document.getElementById('ar-success').style.display='none';
+  showPage('page-home');
+}
+
+// ═══════════════════════════════════════════════════════
+// TOAST
+// ═══════════════════════════════════════════════════════
+window.showToast=function(msg,type=''){
+  const t=document.getElementById('toast');
+  t.textContent=msg;t.className=`toast ${type} show`;
+  clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove('show'),2800);
+};
+
+// ═══════════════════════════════════════════════════════
+// INIT
+// ═══════════════════════════════════════════════════════
+renderGrid('home-grid',restaurants.slice(0,4));
+updateCartUI();
+updateNavUI();
+window._allOrders=JSON.parse(localStorage.getItem('zk_orders')||'[]');
+
+// Seed restaurant PINs to Firebase on first load (only creates docs that don't exist)
+setTimeout(()=>{window.seedRestaurantPins&&window.seedRestaurantPins();},3000);
+
+// Restore session if it exists
+if(_session){
+  updateNavUI();
+}
+</script>
+</body>
+</html>
