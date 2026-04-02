@@ -480,6 +480,7 @@ select.fi{cursor:pointer;appearance:none;background-image:url("data:image/svg+xm
     <div class="hbtns">
       <button class="btn btn-g" onclick="showPage('page-browse')">🍽️ Browse Restaurants</button>
       <button class="btn btn-o" onclick="showPage('page-add')">🏪 Add Your Restaurant</button>
+      <button class="btn btn-o" onclick="testFirebase()" style="background:rgba(245,158,11,.15);border-color:var(--gold);color:var(--gold)">🔥 Test Firebase</button>
     </div>
   </div>
   <div class="stats">
@@ -1469,6 +1470,43 @@ window.showToast=function(msg,type=''){
   t.textContent=msg;t.className=`toast ${type} show`;
   clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove('show'),2800);
 };
+
+// ═══════════════════════════════════════════════════════
+// FIREBASE TEST
+// ═══════════════════════════════════════════════════════
+async function testFirebase(){
+  const btn=event.target;
+  btn.textContent='Testing...';
+  btn.disabled=true;
+
+  if(!window._fbReady||!window._db){
+    showToast('Firebase NOT connected — _fbReady is false','err');
+    btn.textContent='Test Firebase';btn.disabled=false;
+    return;
+  }
+
+  try{
+    const testDoc={
+      test:true,
+      message:'Firebase connection test',
+      timestamp:new Date().toISOString(),
+      customerName:'TEST',
+      customerPhone:'000',
+      status:'Order Received',
+      total:0,
+      restaurantIds:['test']
+    };
+    const ref=await addDoc(collection(window._db,'zk_orders'),testDoc);
+    showToast('SUCCESS! Order saved with ID: '+ref.id,'ok');
+    btn.textContent='Test Firebase';btn.disabled=false;
+    alert('Firebase working! Test order ID: '+ref.id+'. Check Firestore now.');
+  }catch(err){
+    showToast('FAILED: '+err.message,'err');
+    btn.textContent='Test Firebase';btn.disabled=false;
+    alert('Firebase Error: '+err.code+' — '+err.message);
+    console.error('Firebase test error:',err);
+  }
+}
 
 // ═══════════════════════════════════════════════════════
 // INIT
