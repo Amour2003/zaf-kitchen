@@ -22,12 +22,27 @@ const firebaseConfig={
 try{
   const app=initializeApp(firebaseConfig);
   const db=getFirestore(app);
-  window._db=db;window._fbReady=true;
-  window._fb={collection,addDoc,onSnapshot,doc,updateDoc,setDoc,getDoc,getDocs,query,orderBy,where,serverTimestamp};
+  window._db=db;
+  window._fbReady=true;
+  // Expose ALL Firestore functions to window so main script can use them
+  window._addDoc=addDoc;
+  window._collection=collection;
+  window._serverTimestamp=serverTimestamp;
+  window._doc=doc;
+  window._updateDoc=updateDoc;
+  window._setDoc=setDoc;
+  window._getDoc=getDoc;
+  window._getDocs=getDocs;
+  window._query=query;
+  window._orderBy=orderBy;
+  window._where=where;
+  window._onSnapshot=onSnapshot;
+  window._fb={addDoc,collection,onSnapshot,doc,updateDoc,setDoc,getDoc,getDocs,query,orderBy,where,serverTimestamp};
+
   const s=document.getElementById('db-status');
   if(s){s.textContent='Live DB';s.style.color='var(--green)';}
 
-  /* Live orders listener — Firestore real-time */
+  // Live orders listener
   const ordQ=query(collection(db,'zk_orders'),orderBy('timestamp','desc'));
   onSnapshot(ordQ,snap=>{
     window._allOrders=snap.docs.map(d=>({id:d.id,...d.data()}));
@@ -37,7 +52,7 @@ try{
     if(window._trackingOrderId)window.refreshTracker&&window.refreshTracker(window._trackingOrderId);
   });
 
-  /* Seed restaurant PINs if not existing */
+  // Seed restaurant PINs
   window.seedRestaurantPins=async function(){
     const rests=[
       {rid:'rest_001',name:'Awery Kitchen',pin:'1001'},
@@ -61,7 +76,6 @@ try{
     window.showToast&&window.showToast('Restaurant PINs ready','ok');
   };
 
-  /* Verify PIN from Firebase for custom PINs */
   window.verifyPinFirebase=async function(pin){
     try{
       const q2=query(collection(db,'zk_restaurants'),where('pin','==',pin));
@@ -71,7 +85,6 @@ try{
     return null;
   };
 
-  /* Load/save menu */
   window.loadMenuFirebase=async function(rid){
     try{
       const snap=await getDoc(doc(db,'zk_restaurants',rid));
@@ -79,6 +92,7 @@ try{
     }catch(e){console.warn('Menu load:',e);}
     return null;
   };
+
   window.saveMenuFirebase=async function(rid,menu){
     await updateDoc(doc(db,'zk_restaurants',rid),{menu,updatedAt:new Date().toISOString()});
   };
@@ -90,17 +104,17 @@ try{
   console.warn('Firebase error:',e);
 }
 
-/* Save order */
+// Save order - uses window._addDoc exposed from module
 window.saveOrder=async function(data){
-  if(window._fbReady&&window._db&&window._fb){
+  if(window._fbReady&&window._db&&window._addDoc){
     try{
-      const {addDoc,collection,serverTimestamp}=window._fb;
-      const ref=await addDoc(collection(window._db,'zk_orders'),{...data,timestamp:serverTimestamp()});
-      console.log('Order saved to Firestore:',ref.id);
+      const ref=await window._addDoc(window._collection(window._db,'zk_orders'),{...data,timestamp:window._serverTimestamp()});
+      console.log('Saved to Firestore:',ref.id);
       return ref.id;
     }catch(err){
-      console.error('Firestore save error:',err.code,err.message);
-      window.showToast&&window.showToast('DB Error: '+err.message,'err');
+      console.error('Firestore error:',err.code,err.message);
+      window.showToast&&window.showToast('Error: '+err.code,'err');
+      // fallback localStorage
       const local=JSON.parse(localStorage.getItem('zk_orders')||'[]');
       const id='loc_'+Date.now();
       local.unshift({id,...data,timestamp:new Date().toISOString()});
@@ -117,11 +131,9 @@ window.saveOrder=async function(data){
   return id;
 };
 
-/* Update order status */
 window.updateOrderStatus=async function(orderId,newStatus){
-  if(window._fbReady&&window._db&&window._fb){
-    const {doc,updateDoc}=window._fb;
-    await updateDoc(doc(window._db,'zk_orders',orderId),{status:newStatus,updatedAt:new Date().toISOString()});
+  if(window._fbReady&&window._db&&window._updateDoc){
+    await window._updateDoc(window._doc(window._db,'zk_orders',orderId),{status:newStatus,updatedAt:new Date().toISOString()});
     return;
   }
   const local=JSON.parse(localStorage.getItem('zk_orders')||'[]');
@@ -132,11 +144,9 @@ window.updateOrderStatus=async function(orderId,newStatus){
   window.loadRestDashboard&&window.loadRestDashboard();
 };
 
-/* Update restaurant PIN */
 window.updateRestPin=async function(rid,newPin){
-  if(!window._fbReady||!window._db||!window._fb)return false;
-  const {doc,updateDoc}=window._fb;
-  await updateDoc(doc(window._db,'zk_restaurants',rid),{pin:newPin});
+  if(!window._fbReady||!window._db||!window._updateDoc)return false;
+  await window._updateDoc(window._doc(window._db,'zk_restaurants',rid),{pin:newPin});
   return true;
 };
 </script>
@@ -482,7 +492,6 @@ select.fi{cursor:pointer;appearance:none;background-image:url("data:image/svg+xm
     <div class="hbtns">
       <button class="btn btn-g" onclick="showPage('page-browse')">🍽️ Browse Restaurants</button>
       <button class="btn btn-o" onclick="showPage('page-add')">🏪 Add Your Restaurant</button>
-      <button class="btn btn-o" onclick="testFirebase()" style="background:rgba(245,158,11,.15);border-color:var(--gold);color:var(--gold)">🔥 Test Firebase</button>
     </div>
   </div>
   <div class="stats">
@@ -863,13 +872,8 @@ async function submitPin(){
   const pin=_pinBuffer;
   const errEl=document.getElementById('login-err');
   errEl.textContent='';
-
   const localPins={'1001':'rest_001','1002':'rest_002','1003':'rest_003','1004':'rest_004','1005':'rest_005','1006':'rest_006','1007':'rest_007','1008':'rest_008','1009':'rest_009','1010':'rest_010'};
-
-  // Not enough digits yet — wait
   if(pin.length<4)return;
-
-  // 4 digits — check restaurant PINs
   if(pin.length===4&&localPins[pin]){
     const r=restaurantMap[localPins[pin]];
     _pinBuffer='';updatePinDots();
@@ -879,11 +883,7 @@ async function submitPin(){
     showPage('page-rest-dashboard');
     return;
   }
-
-  // 4 digits but not a restaurant — could be start of longer admin PIN, keep waiting
   if(pin.length<8&&pin!==ADMIN_PIN)return;
-
-  // Admin PIN match
   if(pin===ADMIN_PIN){
     _pinBuffer='';updatePinDots();
     saveSession({role:'admin',rid:null,name:'Admin'});
@@ -892,8 +892,6 @@ async function submitPin(){
     showPage('page-dashboard');
     return;
   }
-
-  // 8 digits, not admin — check Firebase for custom restaurant PINs
   if(pin.length===8&&window.verifyPinFirebase){
     errEl.textContent='Checking...';
     const result=await window.verifyPinFirebase(pin);
@@ -906,8 +904,6 @@ async function submitPin(){
       return;
     }
   }
-
-  // Wrong PIN
   _pinBuffer='';updatePinDots();
   errEl.textContent='Wrong PIN. Please try again.';
   document.querySelectorAll('.pin-dot').forEach(d=>{
@@ -1472,44 +1468,6 @@ window.showToast=function(msg,type=''){
   t.textContent=msg;t.className=`toast ${type} show`;
   clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove('show'),2800);
 };
-
-// ═══════════════════════════════════════════════════════
-// FIREBASE TEST
-// ═══════════════════════════════════════════════════════
-async function testFirebase(){
-  const btn=event.target;
-  btn.textContent='Testing...';
-  btn.disabled=true;
-
-  if(!window._fbReady||!window._db){
-    showToast('Firebase NOT connected — _fbReady is false','err');
-    btn.textContent='Test Firebase';btn.disabled=false;
-    return;
-  }
-
-  try{
-    const {addDoc,collection,serverTimestamp}=window._fb;
-    const testDoc={
-      test:true,
-      message:'Firebase connection test',
-      timestamp:new Date().toISOString(),
-      customerName:'TEST',
-      customerPhone:'000',
-      status:'Order Received',
-      total:0,
-      restaurantIds:['test']
-    };
-    const ref=await addDoc(collection(window._db,'zk_orders'),testDoc);
-    showToast('SUCCESS! Order saved with ID: '+ref.id,'ok');
-    btn.textContent='Test Firebase';btn.disabled=false;
-    alert('Firebase working! Test order ID: '+ref.id+'. Check Firestore now.');
-  }catch(err){
-    showToast('FAILED: '+err.message,'err');
-    btn.textContent='Test Firebase';btn.disabled=false;
-    alert('Firebase Error: '+err.code+' — '+err.message);
-    console.error('Firebase test error:',err);
-  }
-}
 
 // ═══════════════════════════════════════════════════════
 // INIT
