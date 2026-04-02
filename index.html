@@ -92,15 +92,15 @@ try{
 
 /* Save order */
 window.saveOrder=async function(data){
-  if(window._fbReady&&window._db){
+  if(window._fbReady&&window._db&&window._fb){
     try{
+      const {addDoc,collection,serverTimestamp}=window._fb;
       const ref=await addDoc(collection(window._db,'zk_orders'),{...data,timestamp:serverTimestamp()});
       console.log('Order saved to Firestore:',ref.id);
       return ref.id;
     }catch(err){
       console.error('Firestore save error:',err.code,err.message);
       window.showToast&&window.showToast('DB Error: '+err.message,'err');
-      // Fallback to localStorage
       const local=JSON.parse(localStorage.getItem('zk_orders')||'[]');
       const id='loc_'+Date.now();
       local.unshift({id,...data,timestamp:new Date().toISOString()});
@@ -119,7 +119,8 @@ window.saveOrder=async function(data){
 
 /* Update order status */
 window.updateOrderStatus=async function(orderId,newStatus){
-  if(window._fbReady&&window._db){
+  if(window._fbReady&&window._db&&window._fb){
+    const {doc,updateDoc}=window._fb;
     await updateDoc(doc(window._db,'zk_orders',orderId),{status:newStatus,updatedAt:new Date().toISOString()});
     return;
   }
@@ -133,7 +134,8 @@ window.updateOrderStatus=async function(orderId,newStatus){
 
 /* Update restaurant PIN */
 window.updateRestPin=async function(rid,newPin){
-  if(!window._fbReady||!window._db)return false;
+  if(!window._fbReady||!window._db||!window._fb)return false;
+  const {doc,updateDoc}=window._fb;
   await updateDoc(doc(window._db,'zk_restaurants',rid),{pin:newPin});
   return true;
 };
@@ -1486,6 +1488,7 @@ async function testFirebase(){
   }
 
   try{
+    const {addDoc,collection,serverTimestamp}=window._fb;
     const testDoc={
       test:true,
       message:'Firebase connection test',
